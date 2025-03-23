@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Redirect Service</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+            background-color: #f9f9f9;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            flex-grow: 1;
+            text-align: center;
+            background-color: #f1f1f1;
+            transition: all 0.3s;
+        }
+        .tab.active {
+            border-bottom: 2px solid #3498db;
+            background-color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .status {
+            text-align: center;
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .copy-btn {
+            background-color: #6c757d;
+            padding: 5px 10px;
+            font-size: 14px;
+        }
+        .hidden {
+            display: none;
+        }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            border-radius: 4px;
+            background-color: #28a745;
+            color: white;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+            transition: opacity 0.5s;
+            opacity: 0;
+        }
+        .show {
+            opacity: 1;
+        }
+        #loading-indicator {
+            text-align: center;
+            margin-top: 20px;
+            font-style: italic;
+            color: #6c757d;
+        }
+    </style>
+    <!-- Підключаємо Iroh через CDN -->
+    <script src="https://unpkg.com/@iroh/sdk"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>P2P Redirect Service</h1>
+        
+        <div id="loading-indicator">Завантаження Iroh...</div>
+        
+        <div class="status" id="network-status">
+            Під'єднання до мережі Iroh...
+        </div>
+        
+        <div class="tabs">
+            <div class="tab active" data-tab="create">Створити</div>
+            <div class="tab" data-tab="manage">Керувати</div>
+            <div class="tab" data-tab="connect">Під'єднатися</div>
+        </div>
+        
+        <div class="tab-content active" id="create">
+            <h2>Створити нове перенаправлення</h2>
+            <div>
+                <label for="shortcode">Коротка назва:</label>
+                <input type="text" id="shortcode" placeholder="mylink">
+            </div>
+            <div>
+                <label for="target-url">URL призначення:</label>
+                <input type="url" id="target-url" placeholder="https://example.com">
+            </div>
+            <div>
+                <label for="description">Опис (необов'язково):</label>
+                <textarea id="description" rows="3" placeholder="Опис цього посилання"></textarea>
+            </div>
+            <button id="create-redirect">Створити</button>
+        </div>
+        
+        <div class="tab-content" id="manage">
+            <h2>Мої перенаправлення</h2>
+            <table id="redirects-table">
+                <thead>
+                    <tr>
+                        <th>Коротка назва</th>
+                        <th>URL призначення</th>
+                        <th>Посилання</th>
+                        <th>Дії</th>
+                    </tr>
+                </thead>
+                <tbody id="redirects-body">
+                    <!-- Links will be populated here -->
+                </tbody>
+            </table>
+            <div id="edit-container" class="hidden">
+                <h3>Редагувати перенаправлення</h3>
+                <input type="hidden" id="edit-id">
+                <div>
+                    <label for="edit-target-url">URL призначення:</label>
+                    <input type="url" id="edit-target-url">
+                </div>
+                <div>
+                    <label for="edit-description">Опис:</label>
+                    <textarea id="edit-description" rows="3"></textarea>
+                </div>
+                <button id="save-edit">Зберегти</button>
+                <button id="cancel-edit" style="background-color: #6c757d;">Скасувати</button>
+            </div>
+        </div>
+        
+        <div class="tab-content" id="connect">
+            <h2>Під'єднатися до мережі</h2>
+            <div>
+                <label for="node-id">Ваш токен вузла Iroh:</label>
+                <input type="text" id="node-id" readonly>
+                <button class="copy-btn" id="copy-node-id">Копіювати</button>
+            </div>
+            <div>
+                <p>Для взаємодії з іншими вузлами в мережі, поділіться своїм токеном.</p>
+            </div>
+            <div>
+                <label for="connect-to-node">Під'єднатися до вузла:</label>
+                <input type="text" id="connect-to-node" placeholder="Введіть токен вузла">
+                <button id="connect-btn">Під'єднатися</button>
+            </div>
+            <div>
+                <h3>Під'єднані вузли</h3>
+                <ul id="connected-nodes">
+                    <!-- Connected nodes will be listed here -->
+                </ul>
+            </div>
+        </div>
+    </div>
+    
+    <div class="notification" id="notification"></div>
+    
+    <script>
+        // Реалізація з використанням справжньої бібліотеки Iroh
+        class IrohRedirectService {
+            constructor() {
+                this.isConnected = false;
+                this.node = null;
+                this.nodeId = null;
+                this.doc = null;
+                this.redirects = [];
+                this.connectedNodes = [];
+                this.callbacks = {};
+                
+                this.init();
+            }
+            
+            async init() {
+                try {
+                    // Ініціалізуємо Iroh
+                    const iroh = window.Iroh;
+                    if (!iroh) {
+                        throw new Error("Бібліотека Iroh не завантажена");
+                    }
+                    
+                    // Створюємо або відновлюємо вузол Iroh
+                    let nodeKey = localStorage.getItem('iroh_node_key');
+                    if (nodeKey) {
+                        nodeKey = JSON.parse(nodeKey);
+                        this.node = await iroh.Node.fromKey(nodeKey);
+                    } else {
+                        this.node = await iroh.Node.create();
+                        localStorage.setItem('iroh_node_key', JSON.stringify(await this.node.key()));
+                    }
+                    
+                    // Отримуємо ID вузла
+                    const ticket = await this.node.ticket();
+                    this.nodeId = ticket.toString();
+                    
+                    // Створюємо або приєднуємося до документа для зберігання редіректів
+                    let docId = localStorage.getItem('iroh_doc_id');
+                    if (docId) {
+                        this.doc = await this.node.docs.open(docId);
+                    } else {
+                        this.doc = await this.node.docs.create();
+                        localStorage.setItem('iroh_doc_id', this.doc.id());
+                    }
+                    
+                    // Завантажуємо збережені дані
+                    await this.loadRedirects();
+                    
+                    // Налаштовуємо синхронізацію
+                    await this.setupSync();
+                    
+                    // Оновлюємо статус
+                    this.isConnected = true;
+                    document.getElementById('loading-indicator').style.display = 'none';
+                    this.updateNetworkStatus();
+                    this.notifyEvent('connected');
+                    
+                    // Перевіряємо, чи потрібно виконати редірект
+                    this.checkRedirect();
+                } catch (error) {
+                    console.error("Помилка ініціалізації Iroh:", error);
+                    document.getElementById('loading-indicator').textContent = 
+                        `Помилка завантаження Iroh: ${error.message}`;
+                    this.showNotification(`Помилка: ${error.message}`);
+                }
+            }
+            
+            async setupSync() {
+                // Налаштовуємо слухання змін у документі
+                const self = this;
+                
+                // Слухаємо зміни в документі
+                this.node.docs.subscribe(this.doc.id(), {
+                    onSynced: async () => {
+                        await self.loadRedirects();
+                        self.updateRedirectsTable();
+                    }
+                });
+                
+                // Запускаємо у фоні процес синхронізації через публічну мережу Iroh
+                try {
+                    await this.node.relay.join(this.doc.id());
+                    console.log("Приєднано до публічного релея для синхронізації");
+                } catch (error) {
+                    console.warn("Неможливо приєднатися до релея:", error);
+                }
+            }
+            
+            async loadRedirects() {
+                try {
+                    // Отримуємо останню версію документа
+                    const currentQuery = await this.doc.query({});
+                    
+                    // Парсимо дані редіректів
+                    if (currentQuery && currentQuery.content) {
+                        try {
+                            const content = new TextDecoder().decode(currentQuery.content);
+                            this.redirects = JSON.parse(content);
+                        } catch (e) {
+                            this.redirects = [];
+                        }
+                    } else {
+                        // Встановлюємо початковий вміст, якщо документ порожній
+                        await this.saveRedirects();
+                    }
+                    
+                    // Оновлюємо UI
+                    this.updateRedirectsTable();
+                } catch (error) {
+                    console.error("Помилка завантаження редіректів:", error);
+                }
+            }
+            
+            async saveRedirects() {
+                try {
+                    // Зберігаємо дані в документ
+                    const content = new TextEncoder().encode(JSON.stringify(this.redirects));
+                    await this.doc.set("redirects", content);
+                } catch (error) {
+                    console.error("Помилка збереження редіректів:", error);
+                    this.showNotification(`Помилка збереження: ${error.message}`);
+                }
+            }
+            
+            updateNetworkStatus() {
+                const statusEl = document.getElementById('network-status');
+                if (this.isConnected) {
+                    statusEl.className = 'status connected';
+                    statusEl.textContent = 'Під'єднано до мережі Iroh';
+                } else {
+                    statusEl.className = 'status disconnected';
+                    statusEl.textContent = 'Від'єднано від мережі Iroh';
+                }
+                document.getElementById('node-id').value = this.nodeId || 'Завантаження...';
+            }
+            
+            async connect(nodeToken) {
+                if (!nodeToken || !this.isConnected) return false;
+                
+                try {
+                    // Розшифровуємо токен вузла
+                    const ticket = Iroh.Ticket.parse(nodeToken);
+                    
+                    // Підключаємося до вузла
+                    await this.node.connect(ticket);
+                    
+                    // Зберігаємо в списку підключених вузлів
+                    if (!this.connectedNodes.includes(nodeToken)) {
+                        this.connectedNodes.push(nodeToken);
+                        this.updateConnectedNodes();
+                        this.showNotification(`Під'єднано до вузла`);
+                    }
+                    
+                    return true;
+                } catch (error) {
+                    console.error("Помилка підключення до вузла:", error);
+                    this.showNotification(`Помилка підключення: ${error.message}`);
+                    return false;
+                }
+            }
+            
+            updateConnectedNodes() {
+                const nodesList = document.getElementById('connected-nodes');
+                nodesList.innerHTML = '';
+                
+                if (this.connectedNodes.length === 0) {
+                    const li = document.createElement('li');
+                    li.textContent = 'Немає під'єднаних вузлів';
+                    nodesList.appendChild(li);
+                    return;
+                }
+                
+                this.connectedNodes.forEach(nodeToken => {
+                    const li = document.createElement('li');
+                    // Відображаємо скорочений токен для читабельності
+                    li.textContent = `${nodeToken.substring(0, 15)}...${nodeToken.substring(nodeToken.length - 10)}`;
+                    nodesList.appendChild(li);
+                });
+            }
+            
+            async createRedirect(shortcode, targetUrl, description = '') {
+                if (!this.isConnected) {
+                    this.showNotification('Неможливо створити редірект: відсутнє з'єднання з Iroh');
+                    return null;
+                }
+                
+                // Перевіряємо чи існує вже такий shortcode
+                if (this.redirects.some(r => r.shortcode === shortcode)) {
+                    this.showNotification('Така коротка назва вже існує');
+                    return null;
+                }
+                
+                const id = Date.now().toString();
+                const redirect = {
+                    id,
+                    shortcode,
+                    targetUrl,
+                    description,
+                    created: new Date().toISOString()
+                };
+                
+                this.redirects.push(redirect);
+                await this.saveRedirects();
+                this.updateRedirectsTable();
+                this.notifyEvent('redirect_created', redirect);
+                return redirect;
+            }
+            
+            async updateRedirect(id, targetUrl, description) {
+                if (!this.isConnected) {
+                    this.showNotification('Неможливо оновити редірект: відсутнє з'єднання з Iroh');
+                    return false;
+                }
+                
+                const index = this.redirects.findIndex(r => r.id === id);
+                if (index !== -1) {
+                    this.redirects[index].targetUrl = targetUrl;
+                    this.redirects[index].description = description;
+                    await this.saveRedirects();
+                    this.updateRedirectsTable();
+                    this.notifyEvent('redirect_updated', this.redirects[index]);
+                    return true;
+                }
+                return false;
+            }
+            
+            async deleteRedirect(id) {
+                if (!this.isConnected) {
+                    this.showNotification('Неможливо видалити редірект: відсутнє з'єднання з Iroh');
+                    return false;
+                }
+                
+                const index = this.redirects.findIndex(r => r.id === id);
+                if (index !== -1) {
+                    const deleted = this.redirects.splice(index, 1)[0];
+                    await this.saveRedirects();
+                    this.updateRedirectsTable();
+                    this.notifyEvent('redirect_deleted', deleted);
+                    return true;
+                }
+                return false;
+            }
+            
+            updateRedirectsTable() {
+                const tableBody = document.getElementById('redirects-body');
+                tableBody.innerHTML = '';
+                
+                if (this.redirects.length === 0) {
+                    const row = document.createElement('tr');
+                    const cell = document.createElement('td');
+                    cell.colSpan = 4;
+                    cell.textContent = 'Немає збережених перенаправлень';
+                    cell.style.textAlign = 'center';
+                    row.appendChild(cell);
+                    tableBody.appendChild(row);
+                    return;
+                }
+                
+                this.redirects.forEach(redirect => {
+                    const row = document.createElement('tr');
+                    
+                    const shortcodeCell = document.createElement('td');
+                    shortcodeCell.textContent = redirect.shortcode;
+                    
+                    const targetCell = document.createElement('td');
+                    targetCell.textContent = redirect.targetUrl;
+                    
+                    const linkCell = document.createElement('td');
+                    const linkUrl = `${window.location.origin}${window.location.pathname}?r=${redirect.shortcode}`;
+                    const linkElem = document.createElement('a');
+                    linkElem.href = linkUrl;
+                    linkElem.textContent = linkUrl;
+                    linkElem.target = '_blank';
+                    linkCell.appendChild(linkElem);
+                    
+                    const actionsCell = document.createElement('td');
+                    
+                    const editBtn = document.createElement('button');
+                    editBtn.textContent = 'Редагувати';
+                    editBtn.style.marginRight = '5px';
+                    editBtn.addEventListener('click', () => this.editRedirect(redirect.id));
+                    
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.textContent = 'Видалити';
+                    deleteBtn.style.backgroundColor = '#dc3545';
+                    deleteBtn.addEventListener('click', () => this.deleteRedirect(redirect.id));
+                    
+                    const copyBtn = document.createElement('button');
+                    copyBtn.textContent = 'Копіювати URL';
+                    copyBtn.className = 'copy-btn';
+                    copyBtn.style.marginLeft = '5px';
+                    copyBtn.addEventListener('click', () => {
+                        navigator.clipboard.writeText(linkUrl)
+                            .then(() => this.showNotification('URL скопійовано в буфер обміну'));
+                    });
+                    
+                    actionsCell.appendChild(editBtn);
+                    actionsCell.appendChild(deleteBtn);
+                    actionsCell.appendChild(copyBtn);
+                    
+                    row.appendChild(shortcodeCell);
+                    row.appendChild(targetCell);
+                    row.appendChild(linkCell);
+                    row.appendChild(actionsCell);
+                    
+                    tableBody.appendChild(row);
+                });
+            }
+            
+            editRedirect(id) {
+                const redirect = this.redirects.find(r => r.id === id);
+                if (redirect) {
+                    const editContainer = document.getElementById('edit-container');
+                    editContainer.classList.remove('hidden');
+                    
+                    document.getElementById('edit-id').value = redirect.id;
+                    document.getElementById('edit-target-url').value = redirect.targetUrl;
+                    document.getElementById('edit-description').value = redirect.description;
+                    
+                    // Scroll to edit form
+                    editContainer.scrollIntoView({ behavior: 'smooth' });
+                }
+            }
+            
+            showNotification(message) {
+                const notification = document.getElementById('notification');
+                notification.textContent = message;
+                notification.classList.add('show');
+                
+                setTimeout(() => {
+                    notification.classList.remove('show');
+                }, 3000);
+            }
+            
+            on(event, callback) {
+                if (!this.callbacks[event]) {
+                    this.callbacks[event] = [];
+                }
+                this.callbacks[event].push(callback);
+            }
+            
+            notifyEvent(event, data) {
+                if (this.callbacks[event]) {
+                    this.callbacks[event].forEach(callback => callback(data));
+                }
+            }
+            
+            checkRedirect() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const redirectCode = urlParams.get('r');
+                
+                if (redirectCode) {
+                    const redirect = this.redirects.find(r => r.shortcode === redirectCode);
+                    if (redirect) {
+                        window.location.href = redirect.targetUrl;
+                    } else {
+                        // Якщо локально немає, запитуємо у мережі (відбуватиметься автоматично через синхронізацію)
+                        this.showNotification('Перенаправлення не знайдено. Виконується пошук у мережі...');
+                        setTimeout(() => {
+                            // Повторна перевірка через 2 секунди після синхронізації
+                            const redirect = this.redirects.find(r => r.shortcode === redirectCode);
+                            if (redirect) {
+                                window.location.href = redirect.targetUrl;
+                            } else {
+                                this.showNotification('Перенаправлення не знайдено в мережі');
+                            }
+                        }, 2000);
+                    }
+                }
+            }
+            
+            async resetNode() {
+                // Метод для повного скидання вузла (для налагодження)
+                localStorage.removeItem('iroh_node_key');
+                localStorage.removeItem('iroh_doc_id');
+                window.location.reload();
+            }
+        }
+        
+        // Ініціалізація застосунку
+        document.addEventListener('DOMContentLoaded', () => {
+            // Перевіряємо доступність Iroh
+            if (!window.Iroh) {
+                document.getElementById('loading-indicator').textContent = 
+                    'Помилка: Бібліотека Iroh не знайдена. Переконайтеся, що скрипт завантажено правильно.';
+                return;
+            }
+            
+            const irohService = new IrohRedirectService();
+            
+            // Функція для перевірки URL на валідність
+            function isValidUrl(url) {
+                try {
+                    new URL(url);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            }
+            
+            // Переключення вкладок
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const tabId = tab.getAttribute('data-tab');
+                    
+                    // Оновлюємо активну вкладку
+                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    
+                    // Показуємо активний вміст
+                    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+                    document.getElementById(tabId).classList.add('active');
+                });
+            });
+            
+            // Створення редіректу
+            document.getElementById('create-redirect').addEventListener('click', async () => {
+                const shortcode = document.getElementById('shortcode').value.trim();
+                const targetUrl = document.getElementById('target-url').value.trim();
+                const description = document.getElementById('description').value.trim();
+                
+                if (!shortcode) {
+                    irohService.showNotification('Введіть коротку назву');
+                    return;
+                }
+                
+                if (!targetUrl) {
+                    irohService.showNotification('Введіть URL призначення');
+                    return;
+                }
+                
+                if (!isValidUrl(targetUrl)) {
+                    irohService.showNotification('Введіть валідний URL (з протоколом http:// або https://)');
+                    return;
+                }
+                
+                const redirect = await irohService.createRedirect(shortcode, targetUrl, description);
+                if (redirect) {
+                    irohService.showNotification('Перенаправлення створено успішно');
+                    document.getElementById('shortcode').value = '';
+                    document.getElementById('target-url').value = '';
+                    document.getElementById('description').value = '';
+                    
+                    // Переключаємося на вкладку керування
+                    document.querySelector('.tab[data-tab="manage"]').click();
+                }
+            });
+            
+            // Збереження відредагованого редіректу
+            document.getElementById('save-edit').addEventListener('click', async () => {
+                const id = document.getElementById('edit-id').value;
+                const targetUrl = document.getElementById('edit-target-url').value.trim();
+                const description = document.getElementById('edit-description').value.trim();
+                
+                if (!targetUrl) {
+                    irohService.showNotification('Введіть URL призначення');
+                    return;
+                }
+                
+                if (!isValidUrl(targetUrl)) {
+                    irohService.showNotification('Введіть валідний URL (з протоколом http:// або https://)');
+                    return;
+                }
+                
+                if (await irohService.updateRedirect(id, targetUrl, description)) {
+                    irohService.showNotification('Перенаправлення оновлено успішно');
+                    document.getElementById('edit-container').classList.add('hidden');
+                }
+            });
+            
+            // Скасування редагування
+            document.getElementById('cancel-edit').addEventListener('click', () => {
+                document.getElementById('edit-container').classList.add('hidden');
+            });
+            
+            // Копіювання ID вузла
+            document.getElementById('copy-node-id').addEventListener('click', () => {
+                const nodeId = document.getElementById('node-id').value;
+                navigator.clipboard.writeText(nodeId)
+                    .then(() => irohService.showNotification('ID вузла скопійовано в буфер обміну'));
+            });
+            
+            // Підключення до вузла
+            document.getElementById('connect-btn').addEventListener('click', async () => {
+                const nodeToken = document.getElementById('connect-to-node').value.trim();
+                if (nodeToken) {
+                    try {
+                        const success = await irohService.connect(nodeToken);
+                        if (success) {
+                            document.getElementById('connect-to-node').value = '';
+                        } else {
+                            irohService.showNotification('Неможливо під'єднатися до вказаного вузла');
+                        }
+                    } catch (error) {
+                        irohService.showNotification(`Помилка: ${error.message}`);
+                    }
+                } else {
+                    irohService.showNotification('Введіть токен вузла для під'єднання');
+                }
+            });
+            
+            // Додаємо відстежування подій мережі
+            irohService.on('connected', () => {
+                irohService.updateNetworkStatus();
+                irohService.updateConnectedNodes();
+                irohService.updateRedirectsTable();
+            });
+        });
+    </script>
+</body>
+</html>
