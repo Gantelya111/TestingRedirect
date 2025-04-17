@@ -14,17 +14,18 @@ process.env.LIBP2P_LOGGER = 'debug';
 
 const debugLogger = logger('bootstrap-node');
 
-// Визначення порту з змінної середовища або 4001 за замовчуванням
-const port = process.env.PORT || 4001;
+// Визначення портів
+const httpPort = process.env.PORT || 10000; // Порт для HTTP (Render)
+const wsPort = 4001; // Порт для WebSocket (libp2p)
 const hostname = process.env.HOSTNAME || 'my-p2p-bootstrap.onrender.com';
 
-console.log(`Starting bootstrap node on port ${port}...`);
+console.log(`Starting bootstrap node on HTTP port ${httpPort} and WS port ${wsPort}...`);
 
 async function startBootstrapNode() {
   try {
     const node = await createLibp2p({
       addresses: {
-        listen: [`/ip4/0.0.0.0/tcp/${port}/ws`], // WSS без TLS, Render додасть TLS
+        listen: [`/ip4/0.0.0.0/tcp/${wsPort}/ws`], // WebSocket на окремому порті
       },
       transports: [webSockets()],
       streamMuxers: [mplex()],
@@ -75,7 +76,6 @@ async function startBootstrapNode() {
       debugLogger('INFO: Disconnected from peer: %s', evt.detail.toString());
     });
 
-    // Повертаємо вузол і адресу для ендпоінта
     return { node, bootstrapAddress };
   } catch (err) {
     console.error('Failed to start bootstrap node:', err.stack);
@@ -99,9 +99,9 @@ const server = createServer((req, res) => {
   }
 });
 
-// Запускаємо HTTP-сервер на тому ж порту
-server.listen(port, () => {
-  console.log(`HTTP server running on port ${port} for health checks and bootstrap address`);
+// Запускаємо HTTP-сервер на порті Render
+server.listen(httpPort, () => {
+  console.log(`HTTP server running on port ${httpPort} for health checks and bootstrap address`);
 });
 
 // Запускаємо bootstrap-вузол
