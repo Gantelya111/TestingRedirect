@@ -100,7 +100,8 @@ loadRedirectsCacheFromLocalStorage();
 async function fetchBootstrapAddress() {
     const bootstrapUrl = isLocalhost
         ? `http://localhost:${process.env.PORT || 10000}/bootstrap-address`
-        : 'https://my-p2p-bootstrap.onrender.com/bootstrap-address';
+        : '/ip4/127.0.0.1/tcp/4001/ws/p2p/12D3KooWQg4B8pZAVGd1nqR8ZRJZ7fvXtngvtsHFL99otHRzCsFd',
+  '/ip4/10.207.207.218/tcp/4001/ws/p2p/12D3KooWQg4B8pZAVGd1nqR8ZRJZ7fvXtngvtsHFL99otHRzCsFd'; 
     const fallbackMultiaddrs = [
         '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
         '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH',
