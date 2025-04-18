@@ -8,6 +8,7 @@ import { gossipsub } from '@chainsafe/libp2p-gossipsub';
 import { bootstrap } from '@libp2p/bootstrap';
 import { circuitRelayServer } from '@libp2p/circuit-relay-v2';
 import { identify } from '@libp2p/identify';
+import { ping } from '@libp2p/ping';
 import http from 'http';
 import cors from 'cors';
 import { multiaddr } from '@multiformats/multiaddr';
@@ -44,7 +45,8 @@ async function startBootstrapNode() {
         allowPublishToZeroTopicPeers: true,
         globalSignaturePolicy: 'StrictSign'
       }),
-      circuitRelay: circuitRelayServer()
+      circuitRelay: circuitRelayServer(),
+      ping: ping() // Додано сервіс ping
     }
   });
 
