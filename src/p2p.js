@@ -157,57 +157,6 @@ async function discoverNodesFromDHT() {
 }
 
 /**
- * Публікація статичних файлів у DHT
- */
-async function publishStaticFiles() {
-    if (!node || !node.services.dht) {
-        debugLogger('WARN: Cannot publish static files: node or DHT not ready');
-        return;
-    }
-
-    const staticFiles = [
-        { path: 'index.html', key: '/static-files/index.html' },
-        { path: 'p2p.js', key: '/static-files/p2p.js' },
-        { path: 'manager.js', key: '/static-files/manager.js' },
-        { path: 'edit-redirect.js', key: '/static-files/edit-redirect.js' },
-        { path: 'p2p-app.js', key: '/static-files/p2p-app.js' },
-        { path: 'polyfills.js', key: '/static-files/polyfills.js' }
-    ];
-
-    for (const file of staticFiles) {
-        const content = localStorage.getItem(`site-file:${file.path}`);
-        if (content) {
-            try {
-                await node.services.dht.put(
-                    uint8ArrayFromString(file.key),
-                    uint8ArrayFromString(content),
-                    DHT_PUT_OPTIONS
-                );
-                debugLogger('INFO: Published static file to DHT: %s', file.key);
-            } catch (err) {
-                debugLogger('ERROR: Failed to publish static file %s: %o', file.key, err);
-            }
-        }
-    }
-
-    // Періодична повторна публікація
-    setInterval(() => {
-        for (const file of staticFiles) {
-            const content = localStorage.getItem(`site-file:${file.path}`);
-            if (content) {
-                node.services.dht.put(
-                    uint8ArrayFromString(file.key),
-                    uint8ArrayFromString(content),
-                    DHT_PUT_OPTIONS
-                ).catch(err => {
-                    debugLogger('ERROR: Failed to republish static file %s: %o', file.key, err);
-                });
-            }
-        }
-    }, 5 * 60 * 1000); // Кожні 5 хвилин
-}
-
-/**
  * Запит статичного файлу від іншого вузла
  * @param {string} filePath
  * @returns {Promise<string|null>}
@@ -232,7 +181,19 @@ async function requestStaticFile(filePath) {
     }
 
     // Спроба отримати файл через прямий потік
-    const providers = await node.services.dht.findProviders(uint8ArrayFromString(fileKey), DHT_GET_OPTIONS);
+    let providers;
+    try {
+        providers = await node.services.dht.findProviders(uint8ArrayFromString(fileKey), DHT_GET_OPTIONS);
+        // Перевірка, чи providers є ітерабельним
+        if (!providers || typeof providers[Symbol.iterator] !== 'function') {
+            debugLogger('WARN: Providers is not iterable for file %s', filePath);
+            return null;
+        }
+    } catch (err) {
+        debugLogger('ERROR: Failed to find providers for file %s: %o', filePath, err);
+        return null;
+    }
+
     for (const provider of providers) {
         try {
             const stream = await node.dialProtocol(provider.id, STATIC_FILES_PROTOCOL);
@@ -293,29 +254,81 @@ async function loadSiteFromP2P() {
 }
 
 /**
+ * Публікація статичних файлів у DHT
+ */
+async function publishStaticFiles() {
+    if (!node || !node.services.dht) {
+        debugLogger('WARN: Cannot publish static files: node or DHT not ready');
+        return;
+    }
+
+    const staticFiles = [
+        { path: 'index.html', key: '/static-files/index.html' },
+        { path: 'p2p.js', key: '/static-files/p2p.js' },
+        { path: 'manager.js', key: '/static-files/manager.js' },
+        { path: 'edit-redirect.js', key: '/static-files/edit-redirect.js' },
+        { path: 'p2p-app.js', key: '/static-files/p2p-app.js' },
+        { path: 'polyfills.js', key: '/static-files/polyfills.js' }
+    ];
+
+    for (const file of staticFiles) {
+        const content = localStorage.getItem(`site-file:${file.path}`);
+        if (content) {
+            try {
+                await node.services.dht.put(
+                    uint8ArrayFromString(file.key),
+                    uint8ArrayFromString(content),
+                    DHT_PUT_OPTIONS
+                );
+                debugLogger('INFO: Published static file to DHT: %s', file.key);
+            } catch (err) {
+                debugLogger('ERROR: Failed to publish static file %s: %o', file.key, err);
+            }
+        }
+    }
+
+    // Періодична повторна публікація
+    setInterval(() => {
+        for (const file of staticFiles) {
+            const content = localStorage.getItem(`site-file:${file.path}`);
+            if (content) {
+                node.services.dht.put(
+                    uint8ArrayFromString(file.key),
+                    uint8ArrayFromString(content),
+                    DHT_PUT_OPTIONS
+                ).catch(err => {
+                    debugLogger('ERROR: Failed to republish static file %s: %o', file.key, err);
+                });
+            }
+        }
+    }, 5 * 60 * 1000); // Кожні 5 хвилин
+}
+
+/**
  * Отримання адреси bootstrap-вузла
  * @returns {Promise<string[]>}
  */
 async function fetchBootstrapAddress() {
     const bootstrapUrl = isLocalhost
         ? `http://localhost:${process.env.PORT || 10000}/bootstrap-address`
-        : 'https://my-p2p-bootstrap.onrender.com/bootstrap-address';
+        : 'https://libp2p.onrender.com/bootstrap-address';
     const fallbackMultiaddrs = [
         '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
         '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH',
         '/dnsaddr/bootstrap.libp2p.io/p2p/QmZa1sAx2BN6o2jYP7M3s7d4T3XgC7v1eGU5dwV3a3H6TU',
+        '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS'
     ];
 
     try {
         debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
-        const response = await fetch(bootstrapUrl, { timeout: 5000 });
+        const response = await fetch(bootstrapUrl, { timeout: 10000 });
         if (!response.ok) {
             throw new Error(`HTTP error: ${response.status}`);
         }
         const data = await response.json();
-        if (data.address) {
-            debugLogger('INFO: Received bootstrap address: %s', data.address);
-            return [data.address, ...fallbackMultiaddrs];
+        if (data.multiaddr) {
+            debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
+            return [data.multiaddr, ...fallbackMultiaddrs];
         }
         throw new Error('Invalid bootstrap address received');
     } catch (err) {
@@ -423,7 +436,7 @@ async function startNodeInternal() {
             debugLogger('ERROR: Node creation returned undefined');
             throw new Error('Node creation failed');
         }
-        debugLogger("INFO: Libp2p node created with ID: %s", node.peerId.toString());
+        debugLogger("INFO: Libp2p node created with ID: %s", StartupError.toString());
 
         // Реєстрація обробника для статичних файлів
         node.handle(STATIC_FILES_PROTOCOL, async ({ stream, connection }) => {
@@ -566,7 +579,7 @@ async function startNodeInternal() {
         // Публікація статичних файлів
         await publishStaticFiles();
 
-        // Спроба завантажити сайт із P2P
+        // Спроба завантажити сайт з P2P
         await loadSiteFromP2P();
 
         debugLogger("INFO: Starting periodic republishing");
