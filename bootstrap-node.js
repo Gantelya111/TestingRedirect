@@ -1,115 +1,104 @@
 import { createLibp2p } from 'libp2p';
+import { tcp } from '@libp2p/tcp';
 import { webSockets } from '@libp2p/websockets';
-import { mplex } from '@libp2p/mplex';
 import { noise } from '@chainsafe/libp2p-noise';
+import { mplex } from '@libp2p/mplex';
 import { kadDHT } from '@libp2p/kad-dht';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
+import { bootstrap } from '@libp2p/bootstrap';
+import { circuitRelayServer } from '@libp2p/circuit-relay-v2';
 import { identify } from '@libp2p/identify';
-import { ping } from '@libp2p/ping';
-import { logger } from '@libp2p/logger';
-import { createServer } from 'http';
+import http from 'http';
+import cors from 'cors';
+import { multiaddr } from '@multiformats/multiaddr';
 
-// Увімкнути детальне логування
-process.env.LIBP2P_LOGGER = 'debug';
-
-const debugLogger = logger('bootstrap-node');
-
-// Визначення портів
-const httpPort = process.env.PORT || 10000; // Порт для HTTP (Render)
-const wsPort = 4001; // Порт для WebSocket (libp2p)
-const hostname = process.env.HOSTNAME || 'my-p2p-bootstrap.onrender.com';
-
-console.log(`Starting bootstrap node on HTTP port ${httpPort} and WS port ${wsPort}...`);
+// Резервна адреса bootstrap-вузла
+const BOOTSTRAP_MULTIADDR = '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS';
 
 async function startBootstrapNode() {
-  try {
-    const node = await createLibp2p({
-      addresses: {
-        listen: [`/ip4/0.0.0.0/tcp/${wsPort}/ws`], // WebSocket на окремому порті
-      },
-      transports: [webSockets()],
-      streamMuxers: [mplex()],
-      connectionEncryption: [noise()],
-      services: {
-        dht: kadDHT({
-          clientMode: false,
-          protocol: '/ipfs/kad/1.0.0',
-        }),
-        pubsub: gossipsub({
-          allowPublishToZeroPeers: true,
-        }),
-        identify: identify(),
-        ping: ping(),
-      },
-      connectionManager: {
-        minConnections: 0,
-      },
-    });
+  const node = await createLibp2p({
+    addresses: {
+      listen: ['/ip4/0.0.0.0/tcp/0', '/ip4/0.0.0.0/tcp/0/ws']
+    },
+    transports: [tcp(), webSockets()],
+    connectionEncryption: [noise()],
+    streamMuxers: [mplex()],
+    peerDiscovery: [
+      bootstrap({
+        list: [BOOTSTRAP_MULTIADDR],
+        timeout: 1000,
+        tagName: 'bootstrap',
+        tagValue: 50,
+        tagTTL: 120000
+      })
+    ],
+    services: {
+      identify: identify(),
+      dht: kadDHT({
+        protocolPrefix: '/p2p-redirect',
+        maxInboundStreams: 1000,
+        maxOutboundStreams: 1000,
+        clientMode: false
+      }),
+      pubsub: gossipsub({
+        allowPublishToZeroTopicPeers: true,
+        globalSignaturePolicy: 'StrictSign'
+      }),
+      circuitRelay: circuitRelayServer()
+    }
+  });
 
-    console.log('Attempting to start node...');
-    await node.start();
-    console.log('Bootstrap node started with ID:', node.peerId.toString());
-    debugLogger('INFO: Bootstrap node started with ID: %s', node.peerId.toString());
+  await node.start();
+  console.log('Bootstrap node started with ID:', node.peerId.toString());
 
-    // Формуємо Multiaddr для клієнтів
-    const bootstrapAddress = `/dns4/${hostname}/tcp/443/wss/p2p/${node.peerId.toString()}`;
-    console.log('Bootstrap address:', bootstrapAddress);
-    debugLogger('INFO: Bootstrap address: %s', bootstrapAddress);
+  // Отримуємо динамічну адресу вузла
+  const multiaddrs = node.getMultiaddrs().map(ma => ma.toString());
+  console.log('Listening on:', multiaddrs);
 
-    // Виводимо всі Multiaddr
-    const multiaddrs = node.getMultiaddrs().map((ma) => ma.toString());
-    console.log('Listening on:', multiaddrs);
-    debugLogger('INFO: Listening on: %o', multiaddrs);
-
-    node.addEventListener('peer:discovery', (evt) => {
-      console.log('Discovered peer:', evt.detail.id.toString());
-      debugLogger('INFO: Discovered peer: %s', evt.detail.id.toString());
-    });
-
-    node.addEventListener('peer:connect', (evt) => {
-      console.log('Connected to peer:', evt.detail.toString());
-      debugLogger('INFO: Connected to peer: %s', evt.detail.toString());
-    });
-
-    node.addEventListener('peer:disconnect', (evt) => {
-      console.log('Disconnected from peer:', evt.detail.toString());
-      debugLogger('INFO: Disconnected from peer: %s', evt.detail.toString());
-    });
-
-    return { node, bootstrapAddress };
-  } catch (err) {
-    console.error('Failed to start bootstrap node:', err.stack);
-    debugLogger('ERROR: Failed to start bootstrap node: %s', err.stack);
-    throw err;
+  // Вибираємо WebSocket-адресу для клієнтів
+  let selectedMultiaddr = multiaddrs.find(addr => addr.includes('/ws')) || multiaddrs[0];
+  if (!selectedMultiaddr) {
+    console.warn('No WebSocket address found, using default:', BOOTSTRAP_MULTIADDR);
+    selectedMultiaddr = BOOTSTRAP_MULTIADDR;
+  } else {
+    // Додаємо peerId до адреси, якщо його немає
+    if (!selectedMultiaddr.includes('/p2p/')) {
+      selectedMultiaddr = `${selectedMultiaddr}/p2p/${node.peerId.toString()}`;
+    }
   }
+
+  return { node, selectedMultiaddr };
 }
 
-// Додаємо HTTP-сервер для health check і ендпоінта bootstrap-address
-let bootstrapAddress = '';
-const server = createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200);
-    res.end('OK');
-  } else if (req.url === '/bootstrap-address') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ address: bootstrapAddress }));
+// Створюємо HTTP-сервер з оновленим CORS
+const server = http.createServer((req, res) => {
+  // Налаштування CORS для всіх джерел
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.url === '/bootstrap-address') {
+    startBootstrapNode().then(({ selectedMultiaddr }) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ multiaddr: selectedMultiaddr }));
+    }).catch(err => {
+      console.error('Error starting node for /bootstrap-address:', err);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to start node' }));
+    });
   } else {
     res.writeHead(404);
     res.end('Not Found');
   }
 });
 
-// Запускаємо HTTP-сервер на порті Render
-server.listen(httpPort, () => {
-  console.log(`HTTP server running on port ${httpPort} for health checks and bootstrap address`);
+// Запускаємо сервер
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`HTTP server running on port ${PORT}`);
 });
 
-// Запускаємо bootstrap-вузол
-startBootstrapNode()
-  .then(({ node, bootstrapAddress: addr }) => {
-    bootstrapAddress = addr; // Зберігаємо адресу для ендпоінта
-  })
-  .catch((err) => {
-    console.error('Bootstrap node crashed:', err.stack);
-    process.exit(1);
-  });
+// Запускаємо bootstrap-вузол і зберігаємо його адресу
+startBootstrapNode().catch(err => {
+  console.error('Error starting bootstrap node:', err);
+});
