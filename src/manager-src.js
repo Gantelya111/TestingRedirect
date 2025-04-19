@@ -124,9 +124,11 @@ async function initializeManager() {
         console.log('DEBUG: P2P node initialized');
         isNetworkConnected = true;
         p2pStatusDiv.textContent = 'P2P Status: Connected';
+        p2pStatusDiv.style.color = 'green';
     } catch (err) {
         console.error('DEBUG: Error initializing P2P:', err);
         p2pStatusDiv.textContent = 'P2P Status: No network connection. Using local mode.';
+        p2pStatusDiv.style.color = 'red';
         showMessage(messagesDiv, `Error initializing P2P: ${err.message}`, 'error');
     }
 
