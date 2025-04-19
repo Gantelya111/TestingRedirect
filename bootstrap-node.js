@@ -9,15 +9,44 @@ import { bootstrap } from '@libp2p/bootstrap';
 import { circuitRelayServer } from '@libp2p/circuit-relay-v2';
 import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
-import http from 'http';
+import express from 'express';
 import cors from 'cors';
 import { multiaddr } from '@multiformats/multiaddr';
+import { fromString as uint8ArrayFromString } from 'uint8arrays';
 
 // Резервна адреса bootstrap-вузла
 const BOOTSTRAP_MULTIADDR = '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS';
+const DHT_PUT_OPTIONS = { timeout: 60000 };
+
+let node;
+let selectedMultiaddr;
+
+async function publishNodeAddress() {
+  if (!node || node.status !== 'started' || !node.services.dht) {
+    console.warn('Cannot publish node address: node or DHT not ready');
+    return;
+  }
+
+  const nodeKey = `/p2p-nodes/${node.peerId.toString()}`;
+  const nodeValue = JSON.stringify({
+    multiaddrs: node.getMultiaddrs().map(ma => ma.toString()),
+    timestamp: Date.now()
+  });
+
+  try {
+    await node.services.dht.put(
+      uint8ArrayFromString(nodeKey),
+      uint8ArrayFromString(nodeValue),
+      DHT_PUT_OPTIONS
+    );
+    console.log('Published node address to DHT:', nodeKey);
+  } catch (err) {
+    console.error('Failed to publish node address:', err);
+  }
+}
 
 async function startBootstrapNode() {
-  const node = await createLibp2p({
+  node = await createLibp2p({
     addresses: {
       listen: ['/ip4/0.0.0.0/tcp/0', '/ip4/0.0.0.0/tcp/0/ws']
     },
@@ -46,61 +75,56 @@ async function startBootstrapNode() {
         globalSignaturePolicy: 'StrictSign'
       }),
       circuitRelay: circuitRelayServer(),
-      ping: ping() // Додано сервіс ping
+      ping: ping()
     }
   });
 
   await node.start();
   console.log('Bootstrap node started with ID:', node.peerId.toString());
 
-  // Отримуємо динамічну адресу вузла
   const multiaddrs = node.getMultiaddrs().map(ma => ma.toString());
   console.log('Listening on:', multiaddrs);
 
-  // Вибираємо WebSocket-адресу для клієнтів
-  let selectedMultiaddr = multiaddrs.find(addr => addr.includes('/ws')) || multiaddrs[0];
+  selectedMultiaddr = multiaddrs.find(addr => addr.includes('/ws')) || multiaddrs[0];
   if (!selectedMultiaddr) {
     console.warn('No WebSocket address found, using default:', BOOTSTRAP_MULTIADDR);
     selectedMultiaddr = BOOTSTRAP_MULTIADDR;
-  } else {
-    // Додаємо peerId до адреси, якщо його немає
-    if (!selectedMultiaddr.includes('/p2p/')) {
-      selectedMultiaddr = `${selectedMultiaddr}/p2p/${node.peerId.toString()}`;
-    }
+  } else if (!selectedMultiaddr.includes('/p2p/')) {
+    selectedMultiaddr = `${selectedMultiaddr}/p2p/${node.peerId.toString()}`;
   }
 
-  return { node, selectedMultiaddr };
+  // Періодична публікація адреси вузла в DHT
+  await publishNodeAddress();
+  setInterval(publishNodeAddress, 5 * 60 * 1000); // Кожні 5 хвилин
+
+  return node;
 }
 
-// Створюємо HTTP-сервер з оновленим CORS
-const server = http.createServer((req, res) => {
-  // Налаштування CORS для всіх джерел
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+// Запускаємо bootstrap-вузол
+startBootstrapNode().catch(err => {
+  console.error('Error starting bootstrap node:', err);
+});
 
-  if (req.url === '/bootstrap-address') {
-    startBootstrapNode().then(({ selectedMultiaddr }) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ multiaddr: selectedMultiaddr }));
-    }).catch(err => {
-      console.error('Error starting node for /bootstrap-address:', err);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Failed to start node' }));
-    });
+// Створюємо Express-додаток
+const app = express();
+
+// Вмикаємо CORS
+app.use(cors());
+
+// Подаємо статичні файли з папки 'public'
+app.use(express.static('public'));
+
+// Ендпоінт для отримання bootstrap-адреси
+app.get('/bootstrap-address', (req, res) => {
+  if (selectedMultiaddr) {
+    res.json({ multiaddr: selectedMultiaddr });
   } else {
-    res.writeHead(404);
-    res.end('Not Found');
+    res.status(500).json({ error: 'Bootstrap node not started' });
   }
 });
 
 // Запускаємо сервер
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`HTTP server running on port ${PORT}`);
-});
-
-// Запускаємо bootstrap-вузол і зберігаємо його адресу
-startBootstrapNode().catch(err => {
-  console.error('Error starting bootstrap node:', err);
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
