@@ -12,9 +12,13 @@ import { ping } from '@libp2p/ping';
 import express from 'express';
 import cors from 'cors';
 import { multiaddr } from '@multiformats/multiaddr';
-import { fromString as uint8ArrayFromString } from 'uint8arrays';
+import { fromString as uint8ArrayFromString, toString as uint8ArrayToString } from 'uint8arrays';
 import { WebSocketServer } from 'ws';
 import http from 'http';
+import { logger } from '@libp2p/logger';
+
+// Локальний логер
+const debugLogger = logger('bootstrap-node');
 
 // Резервні адреси bootstrap-вузлів
 const BOOTSTRAP_MULTIADDRS = [
@@ -23,13 +27,16 @@ const BOOTSTRAP_MULTIADDRS = [
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH'
 ];
 const DHT_PUT_OPTIONS = { timeout: 60000 };
+const KEY_PREFIX = '/redirect-p2p/entry/';
+const topic = 'redirects-changes-v3';
 
 let node;
 let selectedMultiaddr;
+const redirectsCache = new Map();
 
 async function publishNodeAddress() {
   if (!node || node.status !== 'started' || !node.services.dht) {
-    console.warn('Cannot publish node address: node or DHT not ready');
+    debugLogger('WARN: Cannot publish node address: node or DHT not ready');
     return;
   }
 
@@ -45,9 +52,54 @@ async function publishNodeAddress() {
       uint8ArrayFromString(nodeValue),
       DHT_PUT_OPTIONS
     );
-    console.log('Published node address to DHT:', nodeKey);
+    debugLogger('INFO: Published node address to DHT: %s', nodeKey);
   } catch (err) {
-    console.error('Failed to publish node address:', err);
+    debugLogger('ERROR: Failed to publish node address: %o', err);
+  }
+}
+
+async function handlePubsubMessage(evt) {
+  if (evt.detail.topic !== topic) {
+    return;
+  }
+
+  try {
+    const message = JSON.parse(uint8ArrayToString(evt.detail.data));
+    debugLogger('INFO: Parsed PubSub message: %o', message);
+    if (!message || !message.action || !message.shortCode) {
+      debugLogger('WARN: Invalid PubSub message structure: %o', message);
+      return;
+    }
+
+    const { action, shortCode, redirect } = message;
+    debugLogger(`INFO: Handling PubSub action: ${action} for ${shortCode}`);
+
+    switch (action) {
+      case 'create':
+      case 'update':
+        if (redirect && redirect.destinationUrl) {
+          const current = redirectsCache.get(shortCode) || {};
+          redirectsCache.set(shortCode, {
+            ...current,
+            ...redirect,
+            passwordHash: current.passwordHash || redirect.passwordHash
+          });
+          debugLogger(`INFO: [PubSub] Cached ${action}: ${shortCode}`);
+        } else {
+          debugLogger(`WARN: [PubSub] Invalid redirect data for ${action}: ${shortCode}`);
+        }
+        break;
+      case 'delete':
+        if (redirectsCache.has(shortCode)) {
+          redirectsCache.delete(shortCode);
+          debugLogger(`INFO: [PubSub] Deleted redirect from cache: ${shortCode}`);
+        }
+        break;
+      default:
+        debugLogger(`WARN: [PubSub] Unknown action: ${action}`);
+    }
+  } catch (error) {
+    debugLogger(`ERROR: Error handling PubSub message:`, error);
   }
 }
 
@@ -59,7 +111,7 @@ async function startBootstrapNode() {
       },
       transports: [
         tcp(),
-        webSockets() // Видалено filter
+        webSockets()
       ],
       connectionEncryption: [noise()],
       streamMuxers: [mplex()],
@@ -90,33 +142,42 @@ async function startBootstrapNode() {
     });
 
     await node.start();
-    console.log('Bootstrap node started with ID:', node.peerId.toString());
+    debugLogger('INFO: Bootstrap node started with ID: %s', node.peerId.toString());
 
     const multiaddrs = node.getMultiaddrs().map(ma => ma.toString());
-    console.log('Listening on:', multiaddrs);
+    debugLogger('INFO: Listening on: %o', multiaddrs);
 
-    selectedMultiaddr = multiaddrs.find(addr => addr.includes('/ws')) || multiaddrs[0];
+    // Вибираємо WebSocket-адресу для продакшену, TCP для локального
+    const isLocalhost = process.env.NODE_ENV !== 'production';
+    selectedMultiaddr = multiaddrs.find(addr => addr.includes(isLocalhost ? '/tcp/' : '/ws')) || multiaddrs[0];
     if (!selectedMultiaddr) {
-      console.warn('No valid multiaddr found, falling back to default');
+      debugLogger('WARN: No valid multiaddr found, falling back to default');
       selectedMultiaddr = BOOTSTRAP_MULTIADDRS[0];
     } else if (!selectedMultiaddr.includes('/p2p/')) {
       selectedMultiaddr = `${selectedMultiaddr}/p2p/${node.peerId.toString()}`;
     }
-    console.log('Selected multiaddr:', selectedMultiaddr);
+    debugLogger('INFO: Selected multiaddr: %s', selectedMultiaddr);
+
+    // Підписка на PubSub для синхронізації редиректів
+    if (node.services.pubsub) {
+      node.services.pubsub.subscribe(topic);
+      debugLogger('INFO: Subscribed to PubSub topic: %s', topic);
+      node.services.pubsub.addEventListener('message', handlePubsubMessage);
+    }
 
     await publishNodeAddress();
     setInterval(publishNodeAddress, 5 * 60 * 1000);
 
     node.addEventListener('peer:discovery', (evt) => {
-      console.log('Discovered peer:', evt.detail.id.toString());
+      debugLogger('INFO: Discovered peer: %s', evt.detail.id.toString());
     });
     node.addEventListener('peer:connect', (evt) => {
-      console.log('Connected to peer:', evt.detail.toString());
+      debugLogger('INFO: Connected to peer: %s', evt.detail.toString());
     });
 
     return node;
   } catch (err) {
-    console.error('Failed to start bootstrap node:', err);
+    debugLogger('ERROR: Failed to start bootstrap node: %o', err);
     throw err;
   }
 }
@@ -129,16 +190,16 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws) => {
-  console.log('DEBUG: WebSocket client connected');
+  debugLogger('INFO: WebSocket client connected');
   ws.on('message', (message) => {
-    console.log('DEBUG: WebSocket message received:', message.toString());
+    debugLogger('INFO: WebSocket message received: %s', message.toString());
     ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
   });
   ws.on('error', (err) => {
-    console.error('DEBUG: WebSocket error:', err);
+    debugLogger('ERROR: WebSocket error: %o', err);
   });
   ws.on('close', () => {
-    console.log('DEBUG: WebSocket client disconnected');
+    debugLogger('INFO: WebSocket client disconnected');
   });
 });
 
@@ -167,22 +228,39 @@ app.get('/health', (req, res) => {
 // Ендпоінт для bootstrap-адреси
 app.get('/bootstrap-address', (req, res) => {
   if (node && node.status === 'started' && selectedMultiaddr) {
-    console.log('Serving bootstrap address:', selectedMultiaddr);
+    debugLogger('INFO: Serving bootstrap address: %s', selectedMultiaddr);
     res.json({ multiaddr: selectedMultiaddr });
   } else {
-    console.error('Bootstrap node not started or multiaddr not set');
+    debugLogger('ERROR: Bootstrap node not started or multiaddr not set');
     res.status(500).json({ error: 'Bootstrap node not started' });
   }
+});
+
+// Ендпоінт для синхронізації редиректів
+app.get('/redirects', (req, res) => {
+  const redirects = Array.from(redirectsCache.values());
+  debugLogger('INFO: Serving redirects: %o', redirects);
+  res.json(redirects);
 });
 
 // Запускаємо сервер
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  debugLogger('INFO: Server running on port %d', PORT);
 });
 
 // Запускаємо bootstrap-вузол
 startBootstrapNode().catch(err => {
-  console.error('Error starting bootstrap node:', err);
+  debugLogger('ERROR: Error starting bootstrap node: %o', err);
   process.exit(1);
+});
+
+// Обробка завершення процесу
+process.on('SIGTERM', async () => {
+  debugLogger('INFO: Received SIGTERM, shutting down...');
+  if (node) {
+    await node.stop();
+  }
+  server.close();
+  process.exit(0);
 });
