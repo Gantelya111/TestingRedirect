@@ -393,12 +393,12 @@ async function startNodeInternal() {
     updateP2PStatus('Starting...');
 
     try {
-        // Спочатку отримуємо bootstrap-адреси
+        // Отримання bootstrap-адрес
         debugLogger("INFO: Fetching bootstrap addresses...");
         const bootstrapMultiaddrs = await fetchBootstrapAddress();
         debugLogger("INFO: Bootstrap addresses: %o", bootstrapMultiaddrs);
 
-        // Легка конфігурація Libp2p з отриманими адресами
+        // Конфігурація Libp2p
         const config = {
             addresses: {
                 listen: ['/webrtc']
@@ -419,7 +419,7 @@ async function startNodeInternal() {
             connectionEncryption: [noise()],
             peerDiscovery: [
                 bootstrap({
-                    list: bootstrapMultiaddrs, // Використовуємо отримані адреси
+                    list: bootstrapMultiaddrs,
                     interval: 10000,
                     enabled: true
                 })
@@ -448,7 +448,7 @@ async function startNodeInternal() {
         node = await createLibp2p(config);
         debugLogger("INFO: Libp2p node created with ID: %s", node.peerId.toString());
 
-        // Реєстрація обробника для статичних файлів
+        // Обробник для статичних файлів
         node.handle(STATIC_FILES_PROTOCOL, async ({ stream, connection }) => {
             try {
                 const filePath = uint8ArrayToString((await stream.source.next()).value.slice());
@@ -466,7 +466,7 @@ async function startNodeInternal() {
             }
         });
 
-        // Додаємо обробники подій
+        // Обробники подій
         node.addEventListener('peer:discovery', (evt) => {
             const peerId = evt.detail.id ? evt.detail.id.toString() : 'unknown';
             const multiaddrs = evt.detail.multiaddrs.map(ma => ma.toString());
@@ -491,10 +491,10 @@ async function startNodeInternal() {
         debugLogger('INFO: Node addresses: %o', node.getMultiaddrs().map(ma => ma.toString()));
         debugLogger('INFO: DHT enabled: %o', !!node.services.dht);
 
-        // Паралельне виконання критичних операцій
+        // Критичні операції
         const criticalPromises = [];
 
-        // 1. Підключення до bootstrap-вузлів
+        // Підключення до bootstrap-вузлів
         debugLogger('INFO: Dialing bootstrap nodes: %o', bootstrapMultiaddrs);
         updateP2PStatus('Connecting to network...');
         let successfulConnections = 0;
@@ -510,26 +510,40 @@ async function startNodeInternal() {
         });
         criticalPromises.push(Promise.all(dialPromises));
 
-        // 2. Публікація адреси вузла
+        // Публікація адреси вузла
         criticalPromises.push(publishNodeAddress());
 
-        // 3. Завантаження index.html
+        // Завантаження index.html
         criticalPromises.push(loadSiteFromP2P());
 
-        // 4. Публікація статичних файлів
+        // Публікація статичних файлів
         criticalPromises.push(publishStaticFiles());
 
-        // 5. Підписка на PubSub
-        criticalPromises.push(node.services.pubsub.subscribe(topic).then(() => {
-            debugLogger("INFO: Subscribed to PubSub topic: %s", topic);
-            node.services.pubsub.addEventListener('message', handlePubsubMessage);
-            updateP2PStatus('PubSub subscribed');
-        }));
+        // Підписка на PubSub з перевіркою
+        if (node.services && node.services.pubsub) {
+            const subscribePromise = node.services.pubsub.subscribe(topic);
+            if (subscribePromise && typeof subscribePromise.then === 'function') {
+                criticalPromises.push(subscribePromise.then(() => {
+                    debugLogger("INFO: Subscribed to PubSub topic: %s", topic);
+                    node.services.pubsub.addEventListener('message', handlePubsubMessage);
+                    updateP2PStatus('PubSub subscribed');
+                }).catch(err => {
+                    debugLogger('ERROR: Failed to subscribe to PubSub: %o', err);
+                    updateP2PStatus('Failed to subscribe to PubSub', true);
+                }));
+            } else {
+                debugLogger('WARN: PubSub subscribe method unavailable, skipping subscription');
+                updateP2PStatus('PubSub unavailable, operating in local mode', true);
+            }
+        } else {
+            debugLogger('WARN: PubSub service not initialized, skipping subscription');
+            updateP2PStatus('PubSub unavailable, operating in local mode', true);
+        }
 
-        // Очікування завершення критичних операцій
+        // Очікування критичних операцій
         await Promise.all(criticalPromises);
 
-        // Спроба підключення до вузлів із DHT, якщо bootstrap не вдалися
+        // Підключення до DHT-вузлів, якщо bootstrap не вдалися
         if (successfulConnections === 0) {
             debugLogger('WARN: No bootstrap nodes connected, attempting DHT discovery');
             const dhtAddrs = await discoverNodesFromDHT();
@@ -556,14 +570,11 @@ async function startNodeInternal() {
             updateP2PStatus(`Connected to ${successfulConnections} node(s)`);
         }
 
-        // Запуск періодичного перепідключення
+        // Запуск періодичних операцій
         startRepublishing();
 
-        // Фонові операції
         setTimeout(() => {
-            // Періодична публікація адреси
             setInterval(publishNodeAddress, 2 * 60 * 1000);
-            // Періодичне виявлення вузлів
             setInterval(async () => {
                 const newAddrs = await discoverNodesFromDHT();
                 for (const addr of newAddrs) {
@@ -576,7 +587,6 @@ async function startNodeInternal() {
                     }
                 }
             }, 5 * 60 * 1000);
-            // Завантаження некритичних файлів
             loadNonCriticalFiles();
         }, 1000);
 
@@ -731,7 +741,10 @@ async function createRedirect(url, description = '') {
     debugLogger("INFO: createRedirect called with: %o", { url, description });
     if (!node || node.status !== 'started') {
         debugLogger("WARN: P2P node not ready, waiting for initialization");
-        await startNodePromise.catch(() => {});
+        await startNodePromise.catch(err => {
+            debugLogger('ERROR: Node initialization failed:', err);
+            updateP2PStatus('Node failed, using local mode', true);
+        });
     }
     if (!url || typeof url !== 'string' || url.length < 5) {
         debugLogger("ERROR: Invalid URL provided: %s", url);
@@ -818,12 +831,13 @@ async function createRedirect(url, description = '') {
 
     try {
         debugLogger("INFO: Saving redirect to DHT: %s", key);
-        if (!isIsolated && node.services && node.services.dht) {
-            node.services.dht.put(
+        if (!isIsolated && node && node.services && node.services.dht) {
+            await node.services.dht.put(
                 uint8ArrayFromString(key),
                 uint8ArrayFromString(JSON.stringify(redirect)),
                 DHT_PUT_OPTIONS
-            ).catch(err => debugLogger(`ERROR: Failed to save redirect ${shortCode}:`, err));
+            );
+            debugLogger(`INFO: Successfully saved redirect ${shortCode} to DHT`);
         } else {
             debugLogger(`INFO: Local mode, skipping DHT save for ${shortCode}`);
         }
@@ -840,12 +854,12 @@ async function createRedirect(url, description = '') {
     const safeRedirect = { destinationUrl: redirect.destinationUrl, description: redirect.description, createdAt: redirect.createdAt };
     const message = { action: 'create', shortCode, redirect: safeRedirect };
     try {
-        if (!isIsolated && node.services && node.services.pubsub) {
-            node.services.pubsub.publish(
+        if (!isIsolated && node && node.services && node.services.pubsub) {
+            await node.services.pubsub.publish(
                 topic,
                 uint8ArrayFromString(JSON.stringify(message))
-            ).catch(err => debugLogger(`ERROR: Error publishing create message for ${shortCode}:`, err));
-            debugLogger(`INFO: Published create message for ${shortCode}`);
+            );
+            debugLogger(`INFO: Successfully published create message for ${shortCode}`);
             updateP2PStatus('Published creation message');
         } else {
             debugLogger(`INFO: Local mode, skipping PubSub publish for ${shortCode}`);
@@ -854,6 +868,7 @@ async function createRedirect(url, description = '') {
     } catch (error) {
         debugLogger(`ERROR: Error publishing create message for ${shortCode}:`, error);
         updateP2PStatus('Error publishing creation message', true);
+        throw new Error(`Failed to publish redirect: ${error.message}`);
     }
 
     debugLogger("INFO: Caching redirect locally: %s", shortCode);
@@ -969,11 +984,12 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
     try {
         debugLogger("INFO: Saving updated redirect to DHT: %s", key);
         if (!isIsolated && node.services && node.services.dht) {
-            node.services.dht.put(
+            await node.services.dht.put(
                 uint8ArrayFromString(key),
                 uint8ArrayFromString(JSON.stringify(updatedRedirect)),
                 DHT_PUT_OPTIONS
-            ).catch(err => debugLogger(`ERROR: Failed to update redirect ${shortCode}:`, err));
+            );
+            debugLogger(`INFO: Successfully saved updated redirect ${shortCode} to DHT`);
         } else {
             debugLogger(`INFO: Local mode, skipping DHT update for ${shortCode}`);
         }
@@ -991,11 +1007,11 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
     const message = { action: 'update', shortCode, redirect: safeRedirect };
     try {
         if (!isIsolated && node.services && node.services.pubsub) {
-            node.services.pubsub.publish(
+            await node.services.pubsub.publish(
                 topic,
                 uint8ArrayFromString(JSON.stringify(message))
-            ).catch(err => debugLogger(`ERROR: Error publishing update message for ${shortCode}:`, err));
-            debugLogger(`INFO: Published update message for ${shortCode}`);
+            );
+            debugLogger(`INFO: Successfully published update message for ${shortCode}`);
             updateP2PStatus('Published update message');
         } else {
             debugLogger(`INFO: Local mode, skipping PubSub update for ${shortCode}`);
@@ -1004,6 +1020,7 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
     } catch (error) {
         debugLogger(`ERROR: Error publishing update message for ${shortCode}:`, error);
         updateP2PStatus('Error publishing update message', true);
+        throw new Error(`Failed to publish update: ${error.message}`);
     }
 
     debugLogger("INFO: Updating local cache for: %s", shortCode);
@@ -1051,11 +1068,11 @@ async function deleteRedirect(shortCode, redirectPassword) {
     const message = { action: 'delete', shortCode };
     try {
         if (!isIsolated && node.services && node.services.pubsub) {
-            node.services.pubsub.publish(
+            await node.services.pubsub.publish(
                 topic,
                 uint8ArrayFromString(JSON.stringify(message))
-            ).catch(err => debugLogger(`ERROR: Error publishing delete message for ${shortCode}:`, err));
-            debugLogger(`INFO: Published delete message for ${shortCode}`);
+            );
+            debugLogger(`INFO: Successfully published delete message for ${shortCode}`);
             updateP2PStatus('Published deletion message');
         } else {
             debugLogger(`INFO: Local mode, skipping PubSub delete for ${shortCode}`);
@@ -1064,6 +1081,7 @@ async function deleteRedirect(shortCode, redirectPassword) {
     } catch (error) {
         debugLogger(`ERROR: Error publishing delete message for ${shortCode}:`, error);
         updateP2PStatus('Error publishing deletion message', true);
+        throw new Error(`Failed to publish deletion: ${error.message}`);
     }
 
     const deletedFromCache = redirectsCache.delete(shortCode);
