@@ -22,7 +22,7 @@ const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
 const isCryptoAvailable = typeof crypto !== 'undefined' && crypto.subtle && typeof crypto.subtle.digest === 'function';
 const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-debugLogger('INFO: Environment check - SecureContext: %o, CryptoAvailable: %o, Localhost: %o, HTTPS: %o', 
+debugLogger('INFO: Environment check - SecureContext: %o, CryptoAvailable: %o, Localhost: %o, HTTPS: %o',
     isSecureContext, isCryptoAvailable, isLocalhost, isHttps);
 
 if (!isHttps && !isLocalhost) {
@@ -42,6 +42,7 @@ const STATIC_FILES_PROTOCOL = '/static-files/1.0.0';
 let republishIntervalId = null;
 let nodeInitializationStatus = 'idle';
 let startNodePromise = null;
+let pollingIntervalId = null;
 
 // Зберігання redirectsCache у localStorage
 function saveRedirectsCacheToLocalStorage() {
@@ -133,7 +134,7 @@ async function discoverNodesFromDHT() {
 
     const nodeAddresses = [];
     const prefix = '/p2p-nodes/';
-    
+
     try {
         for await (const provider of node.services.dht.findProviders(uint8ArrayFromString(prefix), DHT_GET_OPTIONS)) {
             const key = `/p2p-nodes/${provider.id.toString()}`;
@@ -323,35 +324,64 @@ async function publishStaticFiles() {
  * @returns {Promise<string[]>}
  */
 async function fetchBootstrapAddress() {
-  const bootstrapUrl = isLocalhost
-    ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
-    : 'https://libp2p.onrender.com/bootstrap-address';
-  const fallbackMultiaddrs = [
-    '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS',
-    '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-    '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH'
-  ];
+    const bootstrapUrl = isLocalhost
+        ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
+        : 'https://libp2p.onrender.com/bootstrap-address';
+    const fallbackMultiaddrs = [
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmZa1sAx2BN6o2jYP7M3s7d4T3XgC7v1eGU5dwV3a3H6TU',
+        '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS'
+    ];
 
-  try {
-    debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch(bootstrapUrl, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!response.ok) {
-      throw new Error(`HTTP error: ${response.status}`);
+    try {
+        debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const response = await fetch(bootstrapUrl, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!response.ok) {
+            throw new Error(`HTTP error: ${response.status}`);
+        }
+        const data = await response.json();
+        if (data.multiaddr) {
+            debugLogger('INFO: Received valid bootstrap address: %s', data.multiaddr);
+            return [data.multiaddr, ...fallbackMultiaddrs];
+        }
+        throw new Error('Invalid bootstrap address received');
+    } catch (err) {
+        debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
+        debugLogger('INFO: Falling back to public bootstrap nodes');
+        return fallbackMultiaddrs;
     }
-    const data = await response.json();
-    if (data.multiaddr && (data.multiaddr.includes('/ws') || data.multiaddr.includes('/wss'))) {
-      debugLogger('INFO: Received valid bootstrap address: %s', data.multiaddr);
-      return [data.multiaddr, ...fallbackMultiaddrs];
+}
+
+/**
+ * HTTP Polling для синхронізації редиректів (резервний механізм)
+ */
+async function syncRedirectsViaPolling() {
+    if (!isHttps && !isLocalhost) {
+        debugLogger('WARN: HTTP polling disabled in non-HTTPS environment');
+        return;
     }
-    throw new Error('Invalid bootstrap address received (no /ws or /wss)');
-  } catch (err) {
-    debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
-    debugLogger('INFO: Falling back to public bootstrap nodes');
-    return fallbackMultiaddrs;
-  }
+    try {
+        const response = await fetch('https://libp2p.onrender.com/redirects', { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) {
+            throw new Error(`HTTP error: ${response.status}`);
+        }
+        const redirects = await response.json();
+        redirects.forEach(r => {
+            if (r.shortCode && r.destinationUrl) {
+                redirectsCache.set(r.shortCode, r);
+            }
+        });
+        saveRedirectsCacheToLocalStorage();
+        debugLogger('INFO: Synced redirects via HTTP polling');
+        updateP2PStatus('Synced redirects via polling');
+    } catch (err) {
+        debugLogger('ERROR: Failed to sync redirects via polling: %o', err);
+        updateP2PStatus('Failed to sync redirects via polling', true);
+    }
 }
 
 /**
@@ -418,7 +448,7 @@ async function startNodeInternal() {
             connectionEncryption: [noise()],
             peerDiscovery: [
                 bootstrap({
-                    list: bootstrapMultiaddrs, // Використовуємо отримані адреси
+                    list: bootstrapMultiaddrs,
                     interval: 10000,
                     enabled: true
                 })
@@ -426,7 +456,7 @@ async function startNodeInternal() {
             services: {
                 dht: kadDHT({
                     clientMode: true,
-                    protocol: '/ipfs/kad/1.0.0',
+                    protocol: '/p2p-redirect/kad/1.0.0',
                     enabled: isCryptoAvailable
                 }),
                 pubsub: gossipsub({
@@ -519,11 +549,16 @@ async function startNodeInternal() {
         criticalPromises.push(publishStaticFiles());
 
         // 5. Підписка на PubSub
-        criticalPromises.push(node.services.pubsub.subscribe(topic).then(() => {
+        if (node.services.pubsub) {
+            node.services.pubsub.subscribe(topic);
             debugLogger("INFO: Subscribed to PubSub topic: %s", topic);
             node.services.pubsub.addEventListener('message', handlePubsubMessage);
             updateP2PStatus('PubSub subscribed');
-        }));
+        } else {
+            debugLogger('ERROR: PubSub service is not available, falling back to HTTP polling');
+            updateP2PStatus('PubSub unavailable, using HTTP polling', true);
+            startPolling();
+        }
 
         // Очікування завершення критичних операцій
         await Promise.all(criticalPromises);
@@ -548,8 +583,9 @@ async function startNodeInternal() {
         }
 
         if (successfulConnections === 0) {
-            debugLogger("WARN: No connections established");
-            updateP2PStatus('No network connection', true);
+            debugLogger("WARN: No connections established, enabling HTTP polling");
+            updateP2PStatus('No network connection, using HTTP polling', true);
+            startPolling();
         } else {
             debugLogger('INFO: Connected to %d node(s)', successfulConnections);
             updateP2PStatus(`Connected to ${successfulConnections} node(s)`);
@@ -587,8 +623,21 @@ async function startNodeInternal() {
         nodeInitializationStatus = 'failed';
         updateP2PStatus(`Failed to start: ${error.message}`, true);
         node = null;
+        startPolling();
         throw error;
     }
+}
+
+/**
+ * Запуск HTTP polling як резервного механізму
+ */
+function startPolling() {
+    if (pollingIntervalId) {
+        clearInterval(pollingIntervalId);
+    }
+    syncRedirectsViaPolling();
+    pollingIntervalId = setInterval(syncRedirectsViaPolling, 10 * 1000);
+    debugLogger('INFO: Started HTTP polling for redirect synchronization');
 }
 
 startNodePromise = startNodeInternal();
@@ -599,6 +648,11 @@ async function stopNode() {
         clearInterval(republishIntervalId);
         republishIntervalId = null;
         debugLogger("INFO: Stopped republishing interval");
+    }
+    if (pollingIntervalId) {
+        clearInterval(pollingIntervalId);
+        pollingIntervalId = null;
+        debugLogger("INFO: Stopped polling interval");
     }
     if (node && node.status === 'started') {
         try {
