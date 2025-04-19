@@ -59,9 +59,7 @@ async function startBootstrapNode() {
       },
       transports: [
         tcp(),
-        webSockets({
-          filter: (addr) => addr.includes('/ws')
-        })
+        webSockets() // Видалено filter
       ],
       connectionEncryption: [noise()],
       streamMuxers: [mplex()],
