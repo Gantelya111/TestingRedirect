@@ -324,36 +324,30 @@ async function publishStaticFiles() {
  * @returns {Promise<string[]>}
  */
 async function fetchBootstrapAddress() {
-    const bootstrapUrl = isLocalhost
-        ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
-        : 'https://libp2p.onrender.com/bootstrap-address';
-    const fallbackMultiaddrs = [
-        '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-        '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH',
-        '/dnsaddr/bootstrap.libp2p.io/p2p/QmZa1sAx2BN6o2jYP7M3s7d4T3XgC7v1eGU5dwV3a3H6TU',
-        '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS'
-    ];
+  const bootstrapUrl = isLocalhost
+    ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
+    : 'https://libp2p.onrender.com/bootstrap-address';
+  const fallbackMultiaddrs = [
+    '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS',
+    '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+    '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH'
+  ];
 
-    try {
-        debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        const response = await fetch(bootstrapUrl, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (!response.ok) {
-            throw new Error(`HTTP error: ${response.status}`);
-        }
-        const data = await response.json();
-        if (data.multiaddr) {
-            debugLogger('INFO: Received valid bootstrap address: %s', data.multiaddr);
-            return [data.multiaddr, ...fallbackMultiaddrs];
-        }
-        throw new Error('Invalid bootstrap address received');
-    } catch (err) {
-        debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
-        debugLogger('INFO: Falling back to public bootstrap nodes');
-        return fallbackMultiaddrs;
+  try {
+    debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
+    const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+    const data = await response.json();
+    if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
+      debugLogger('INFO: Received valid bootstrap address: %s', data.multiaddr);
+      return [data.multiaddr, ...fallbackMultiaddrs];
     }
+    throw new Error('Invalid bootstrap address (local address received)');
+  } catch (err) {
+    debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
+    debugLogger('INFO: Falling back to public bootstrap nodes');
+    return fallbackMultiaddrs;
+  }
 }
 
 /**
