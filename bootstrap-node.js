@@ -60,6 +60,7 @@ async function publishNodeAddress() {
 
 async function handlePubsubMessage(evt) {
   if (evt.detail.topic !== topic) {
+    debugLogger('INFO: Ignoring message for topic: %s', evt.detail.topic);
     return;
   }
 
@@ -79,12 +80,14 @@ async function handlePubsubMessage(evt) {
       case 'update':
         if (redirect && redirect.destinationUrl) {
           const current = redirectsCache.get(shortCode) || {};
-          redirectsCache.set(shortCode, {
+          const updatedRedirect = {
             ...current,
             ...redirect,
             passwordHash: current.passwordHash || redirect.passwordHash
-          });
-          debugLogger(`INFO: [PubSub] Cached ${action}: ${shortCode}`);
+          };
+          redirectsCache.set(shortCode, updatedRedirect);
+          debugLogger(`INFO: [PubSub] Cached ${action}: ${shortCode}, redirect: %o`, updatedRedirect);
+          debugLogger('INFO: Updated redirectsCache size: %d', redirectsCache.size);
         } else {
           debugLogger(`WARN: [PubSub] Invalid redirect data for ${action}: ${shortCode}`);
         }
@@ -93,13 +96,16 @@ async function handlePubsubMessage(evt) {
         if (redirectsCache.has(shortCode)) {
           redirectsCache.delete(shortCode);
           debugLogger(`INFO: [PubSub] Deleted redirect from cache: ${shortCode}`);
+          debugLogger('INFO: Updated redirectsCache size: %d', redirectsCache.size);
+        } else {
+          debugLogger(`INFO: [PubSub] Redirect ${shortCode} not found in cache`);
         }
         break;
       default:
         debugLogger(`WARN: [PubSub] Unknown action: ${action}`);
     }
   } catch (error) {
-    debugLogger(`ERROR: Error handling PubSub message:`, error);
+    debugLogger(`ERROR: Error handling PubSub message: %o`, error);
   }
 }
 
@@ -201,10 +207,19 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws) => {
   debugLogger('INFO: WebSocket client connected');
-  ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
+  if (node && node.status === 'started' && selectedMultiaddr) {
+    ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
+  } else {
+    ws.send(JSON.stringify({ status: 'error', message: 'Bootstrap node not ready' }));
+    debugLogger('WARN: WebSocket connection attempted but node not ready');
+  }
   ws.on('message', (message) => {
     debugLogger('INFO: WebSocket message received: %s', message.toString());
-    ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
+    if (node && node.status === 'started' && selectedMultiaddr) {
+      ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
+    } else {
+      ws.send(JSON.stringify({ status: 'error', message: 'Bootstrap node not ready' }));
+    }
   });
   ws.on('error', (err) => {
     debugLogger('ERROR: WebSocket error: %o', err);
@@ -249,7 +264,14 @@ app.get('/bootstrap-address', (req, res) => {
 
 // Ендпоінт для синхронізації редиректів
 app.get('/redirects', (req, res) => {
-  const redirects = Array.from(redirectsCache.values());
+  debugLogger('INFO: GET /redirects called, current redirectsCache size: %d', redirectsCache.size);
+  const redirects = Array.from(redirectsCache.entries()).map(([shortCode, redirect]) => ({
+    shortCode,
+    destinationUrl: redirect.destinationUrl,
+    description: redirect.description || '',
+    createdAt: redirect.createdAt,
+    updatedAt: redirect.updatedAt
+  }));
   debugLogger('INFO: Serving redirects: %o', redirects);
   res.json(redirects);
 });
@@ -258,6 +280,10 @@ app.get('/redirects', (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   debugLogger('INFO: Server running on port %d', PORT);
+  debugLogger('INFO: External WebSocket URL: ws://localhost:%d/ws', PORT);
+  if (process.env.NODE_ENV === 'production') {
+    debugLogger('INFO: Production WebSocket URL: wss://libp2p.onrender.com/ws');
+  }
 });
 
 // Запускаємо bootstrap-вузол
@@ -271,7 +297,10 @@ process.on('SIGTERM', async () => {
   debugLogger('INFO: Received SIGTERM, shutting down...');
   if (node) {
     await node.stop();
+    debugLogger('INFO: Bootstrap node stopped');
   }
-  server.close();
-  process.exit(0);
+  server.close(() => {
+    debugLogger('INFO: HTTP server closed');
+    process.exit(0);
+  });
 });
