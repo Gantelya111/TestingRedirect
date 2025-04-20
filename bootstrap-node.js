@@ -201,6 +201,7 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws) => {
   debugLogger('INFO: WebSocket client connected');
+  ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
   ws.on('message', (message) => {
     debugLogger('INFO: WebSocket message received: %s', message.toString());
     ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
