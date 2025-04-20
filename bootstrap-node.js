@@ -205,7 +205,7 @@ wss.on('connection', (ws) => {
 
 // Налаштування CORS
 app.use(cors({
-  origin: ['https://your-client-domain.com', 'http://localhost:3000'], // Замініть на ваш клієнтський домен
+  origin: ['https://libp2p.onrender.com', 'https://libp2p.onrender.com'], // Замініть на ваш клієнтський домен
   methods: ['GET', 'OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
