@@ -328,7 +328,7 @@ async function fetchBootstrapAddress() {
     ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
     : 'https://libp2p.onrender.com/bootstrap-address';
   const fallbackMultiaddrs = [
-    '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS',
+    '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWEAd5Kk9Zftc2uJm8sRzup3fWjiqtV8vKha6xtgj4N5th',
     '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
     '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH'
   ];
@@ -359,7 +359,9 @@ async function syncRedirectsViaPolling() {
         return;
     }
     try {
+        debugLogger('INFO: Starting HTTP polling to https://libp2p.onrender.com/redirects');
         const response = await fetch('https://libp2p.onrender.com/redirects', { signal: AbortSignal.timeout(5000) });
+        debugLogger('INFO: Polling response status: %d', response.status);
         if (!response.ok) {
             throw new Error(`HTTP error: ${response.status}`);
         }
@@ -425,7 +427,7 @@ async function startNodeInternal() {
         // Легка конфігурація Libp2p з отриманими адресами
         const config = {
             addresses: {
-                listen: ['/webrtc']
+                listen: [] // Вимкнено слухання вхідних з'єднань
             },
             transports: [
                 webSockets({
@@ -480,6 +482,12 @@ async function startNodeInternal() {
         // Створення вузла
         node = await createLibp2p(config);
         debugLogger("INFO: Libp2p node created with ID: %s", node.peerId.toString());
+
+        // Додаємо обробник помилок вузла
+        node.on('error', (err) => {
+            debugLogger('ERROR: Libp2p node error: %o', err);
+            updateP2PStatus(`Node error: ${err.message}`, true);
+        });
 
         // Реєстрація обробника для статичних файлів
         node.handle(STATIC_FILES_PROTOCOL, async ({ stream, connection }) => {
@@ -626,7 +634,7 @@ async function startNodeInternal() {
         updateP2PStatus('Ready');
         return node;
     } catch (error) {
-        debugLogger(`ERROR: Node initialization failed:`, error);
+        debugLogger(`ERROR: Node initialization failed: %o`, error);
         nodeInitializationStatus = 'failed';
         updateP2PStatus(`Failed to start: ${error.message}`, true);
         node = null;
@@ -643,7 +651,7 @@ function startPolling() {
         clearInterval(pollingIntervalId);
     }
     syncRedirectsViaPolling();
-    pollingIntervalId = setInterval(syncRedirectsViaPolling, 5 * 1000); // Зменшено до 5 секунд
+    pollingIntervalId = setInterval(syncRedirectsViaPolling, 5 * 1000);
     debugLogger('INFO: Started HTTP polling for redirect synchronization with 5s interval');
 }
 
@@ -667,7 +675,7 @@ async function stopNode() {
             debugLogger("INFO: Libp2p node stopped");
             updateP2PStatus('Stopped');
         } catch (error) {
-            debugLogger(`ERROR: Error stopping node:`, error);
+            debugLogger(`ERROR: Error stopping node: %o`, error);
             updateP2PStatus('Error stopping node', true);
         } finally {
             node = null;
@@ -733,7 +741,7 @@ async function handlePubsubMessage(evt) {
                 debugLogger(`WARN: [PubSub] Unknown action: ${action}`);
         }
     } catch (error) {
-        debugLogger(`ERROR: Error handling PubSub message:`, error);
+        debugLogger(`ERROR: Error handling PubSub message: %o`, error);
     }
 }
 
@@ -765,7 +773,7 @@ async function republishActiveRedirects() {
                 debugLogger(`INFO: Republished redirect: ${shortCode}`);
                 successCount++;
             } catch (err) {
-                debugLogger(`ERROR: Error republishing redirect ${shortCode}:`, err);
+                debugLogger(`ERROR: Error republishing redirect ${shortCode}: %o`, err);
                 errorCount++;
             }
         } else {
@@ -839,7 +847,7 @@ async function createRedirect(url, description = '') {
                 success = true;
                 debugLogger(`INFO: Generated unique shortCode ${shortCode} on attempt ${attempts}`);
             } else {
-                debugLogger(`ERROR: DHT check error for ${shortCode} on attempt ${attempts}:`, err);
+                debugLogger(`ERROR: DHT check error for ${shortCode} on attempt ${attempts}: %o`, err);
                 if (attempts >= MAX_SHORTCODE_GENERATION_ATTEMPTS) {
                     debugLogger("WARN: Max attempts reached, assuming shortCode is unique");
                     success = true;
@@ -863,7 +871,7 @@ async function createRedirect(url, description = '') {
         passwordHashWithSalt = await hashPassword(password);
         debugLogger("INFO: Password hashed successfully");
     } catch (err) {
-        debugLogger(`ERROR: Error hashing password:`, err);
+        debugLogger(`ERROR: Error hashing password: %o`, err);
         throw err;
     }
 
@@ -883,7 +891,7 @@ async function createRedirect(url, description = '') {
                 uint8ArrayFromString(key),
                 uint8ArrayFromString(JSON.stringify(redirect)),
                 DHT_PUT_OPTIONS
-            ).catch(err => debugLogger(`ERROR: Failed to save redirect ${shortCode}:`, err));
+            ).catch(err => debugLogger(`ERROR: Failed to save redirect ${shortCode}: %o`, err));
         } else {
             debugLogger(`INFO: Local mode, skipping DHT save for ${shortCode}`);
         }
@@ -891,7 +899,7 @@ async function createRedirect(url, description = '') {
         redirectsCache.set(shortCode, redirect);
         saveRedirectsCacheToLocalStorage();
     } catch (error) {
-        debugLogger(`ERROR: Error saving redirect ${shortCode}:`, error);
+        debugLogger(`ERROR: Error saving redirect ${shortCode}: %o`, error);
         updateP2PStatus('Error saving redirect', true);
         throw new Error(`Failed to save redirect: ${error.message}`);
     }
@@ -904,7 +912,8 @@ async function createRedirect(url, description = '') {
             node.services.pubsub.publish(
                 topic,
                 uint8ArrayFromString(JSON.stringify(message))
-            ).catch(err => debugLogger(`ERROR: Error publishing create message for ${shortCode}:`, err));
+            ).then(() => debugLogger(`INFO: Publish confirmed for ${shortCode}`))
+             .catch(err => debugLogger(`ERROR: Error publishing create message for ${shortCode}: %o`, err));
             debugLogger(`INFO: Published create message for ${shortCode}`);
             updateP2PStatus('Published creation message');
         } else {
@@ -912,7 +921,7 @@ async function createRedirect(url, description = '') {
             updateP2PStatus('Skipped network publish in local mode');
         }
     } catch (error) {
-        debugLogger(`ERROR: Error publishing create message for ${shortCode}:`, error);
+        debugLogger(`ERROR: Error publishing create message for ${shortCode}: %o`, error);
         updateP2PStatus('Error publishing creation message', true);
     }
 
@@ -932,7 +941,7 @@ async function getRedirect(shortCode) {
         return null;
     }
     await startNodePromise.catch(err => {
-        debugLogger('WARN: Node failed to start, proceeding in local mode:', err);
+        debugLogger('WARN: Node failed to start, proceeding in local mode: %o', err);
     });
 
     if (redirectsCache.has(shortCode)) {
@@ -975,7 +984,7 @@ async function getRedirect(shortCode) {
             debugLogger(`INFO: getRedirect: ${shortCode} not found in DHT`);
             updateP2PStatus(`Redirect ${shortCode} not found`);
         } else {
-            debugLogger(`ERROR: getRedirect: Error querying DHT for ${shortCode}:`, err);
+            debugLogger(`ERROR: getRedirect: Error querying DHT for ${shortCode}: %o`, err);
             updateP2PStatus(`Error querying network for ${shortCode}`, true);
         }
         return null;
@@ -985,7 +994,7 @@ async function getRedirect(shortCode) {
 async function updateRedirect(shortCode, newUrl, newDescription, redirectPassword) {
     debugLogger("INFO: updateRedirect called with: %o", { shortCode, newUrl, newDescription });
     await startNodePromise.catch(err => {
-        debugLogger('WARN: Node failed to start, proceeding in local mode:', err);
+        debugLogger('WARN: Node failed to start, proceeding in local mode: %o', err);
     });
 
     if (!node || node.status !== 'started') {
@@ -1033,7 +1042,7 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
                 uint8ArrayFromString(key),
                 uint8ArrayFromString(JSON.stringify(updatedRedirect)),
                 DHT_PUT_OPTIONS
-            ).catch(err => debugLogger(`ERROR: Failed to update redirect ${shortCode}:`, err));
+            ).catch(err => debugLogger(`ERROR: Failed to update redirect ${shortCode}: %o`, err));
         } else {
             debugLogger(`INFO: Local mode, skipping DHT update for ${shortCode}`);
         }
@@ -1041,7 +1050,7 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
         redirectsCache.set(shortCode, updatedRedirect);
         saveRedirectsCacheToLocalStorage();
     } catch (error) {
-        debugLogger(`ERROR: Error updating redirect ${shortCode}:`, error);
+        debugLogger(`ERROR: Error updating redirect ${shortCode}: %o`, error);
         updateP2PStatus('Error saving update', true);
         throw new Error(`Failed to update redirect: ${error.message}`);
     }
@@ -1054,7 +1063,8 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
             node.services.pubsub.publish(
                 topic,
                 uint8ArrayFromString(JSON.stringify(message))
-            ).catch(err => debugLogger(`ERROR: Error publishing update message for ${shortCode}:`, err));
+            ).then(() => debugLogger(`INFO: Publish confirmed for ${shortCode}`))
+             .catch(err => debugLogger(`ERROR: Error publishing update message for ${shortCode}: %o`, err));
             debugLogger(`INFO: Published update message for ${shortCode}`);
             updateP2PStatus('Published update message');
         } else {
@@ -1062,7 +1072,7 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
             updateP2PStatus('Skipped network update in local mode');
         }
     } catch (error) {
-        debugLogger(`ERROR: Error publishing update message for ${shortCode}:`, error);
+        debugLogger(`ERROR: Error publishing update message for ${shortCode}: %o`, error);
         updateP2PStatus('Error publishing update message', true);
     }
 
@@ -1079,7 +1089,7 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
 async function deleteRedirect(shortCode, redirectPassword) {
     debugLogger("INFO: deleteRedirect called with: %o", { shortCode });
     await startNodePromise.catch(err => {
-        debugLogger('WARN: Node failed to start, proceeding in local mode:', err);
+        debugLogger('WARN: Node failed to start, proceeding in local mode: %o', err);
     });
 
     if (!node || node.status !== 'started') {
@@ -1114,7 +1124,8 @@ async function deleteRedirect(shortCode, redirectPassword) {
             node.services.pubsub.publish(
                 topic,
                 uint8ArrayFromString(JSON.stringify(message))
-            ).catch(err => debugLogger(`ERROR: Error publishing delete message for ${shortCode}:`, err));
+            ).then(() => debugLogger(`INFO: Publish confirmed for ${shortCode}`))
+             .catch(err => debugLogger(`ERROR: Error publishing delete message for ${shortCode}: %o`, err));
             debugLogger(`INFO: Published delete message for ${shortCode}`);
             updateP2PStatus('Published deletion message');
         } else {
@@ -1122,7 +1133,7 @@ async function deleteRedirect(shortCode, redirectPassword) {
             updateP2PStatus('Skipped network delete in local mode');
         }
     } catch (error) {
-        debugLogger(`ERROR: Error publishing delete message for ${shortCode}:`, error);
+        debugLogger(`ERROR: Error publishing delete message for ${shortCode}: %o`, error);
         updateP2PStatus('Error publishing deletion message', true);
     }
 
@@ -1215,7 +1226,7 @@ async function hashPassword(password, salt = null) {
             debugLogger("INFO: Password hashed: %s", result);
             return result;
         } catch (err) {
-            debugLogger(`ERROR: Error in hashPassword with Web Crypto:`, err);
+            debugLogger(`ERROR: Error in hashPassword with Web Crypto: %o`, err);
             throw err;
         }
     } else {
@@ -1248,7 +1259,7 @@ async function verifyRedirectPassword(providedPassword, storedSaltAndHash) {
         debugLogger("INFO: Password verification result: %o", isValid);
         return isValid;
     } catch (error) {
-        debugLogger(`ERROR: Error during password verification:`, error);
+        debugLogger(`ERROR: Error during password verification: %o`, error);
         return false;
     }
 }
@@ -1268,7 +1279,7 @@ async function generateShortCode(inputString) {
             debugLogger("INFO: Generated shortCode: %s", shortCode);
             return shortCode;
         } catch (err) {
-            debugLogger(`ERROR: Error in generateShortCode with Web Crypto:`, err);
+            debugLogger(`ERROR: Error in generateShortCode with Web Crypto: %o`, err);
             throw err;
         }
     } else {
