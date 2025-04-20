@@ -364,6 +364,7 @@ async function syncRedirectsViaPolling() {
             throw new Error(`HTTP error: ${response.status}`);
         }
         const redirects = await response.json();
+        debugLogger('INFO: Polling fetched redirects: %o', redirects);
         redirects.forEach(r => {
             if (r.shortCode && r.destinationUrl) {
                 redirectsCache.set(r.shortCode, r);
@@ -427,7 +428,16 @@ async function startNodeInternal() {
                 listen: ['/webrtc']
             },
             transports: [
-                webSockets(),
+                webSockets({
+                    filter: (multiaddr) => {
+                        const addrStr = multiaddr.toString();
+                        if (addrStr.includes('/wss')) {
+                            debugLogger('INFO: Modifying WebSocket multiaddr to include /ws: %s', addrStr);
+                            return addrStr.replace('/wss', '/wss/ws');
+                        }
+                        return addrStr;
+                    }
+                }),
                 webRTC({
                     rtcConfiguration: {
                         iceServers: [
@@ -524,6 +534,7 @@ async function startNodeInternal() {
         const dialPromises = bootstrapMultiaddrs.map(async (addr) => {
             try {
                 const ma = multiaddr(addr);
+                debugLogger('INFO: Attempting to dial bootstrap node: %s', addr);
                 await node.dial(ma, { timeout: 3000 });
                 debugLogger('INFO: Successfully dialed bootstrap node: %s', addr);
                 successfulConnections++;
@@ -565,6 +576,7 @@ async function startNodeInternal() {
                 const dhtDialPromises = dhtAddrs.map(async (addr) => {
                     try {
                         const ma = multiaddr(addr);
+                        debugLogger('INFO: Attempting to dial DHT node: %s', addr);
                         await node.dial(ma, { timeout: 3000 });
                         debugLogger('INFO: Successfully dialed DHT node: %s', addr);
                         successfulConnections++;
@@ -598,6 +610,7 @@ async function startNodeInternal() {
                 for (const addr of newAddrs) {
                     try {
                         const ma = multiaddr(addr);
+                        debugLogger('INFO: Attempting to dial discovered node: %s', addr);
                         await node.dial(ma, { timeout: 3000 });
                         debugLogger('INFO: Successfully dialed discovered node: %s', addr);
                     } catch (err) {
@@ -630,8 +643,8 @@ function startPolling() {
         clearInterval(pollingIntervalId);
     }
     syncRedirectsViaPolling();
-    pollingIntervalId = setInterval(syncRedirectsViaPolling, 10 * 1000);
-    debugLogger('INFO: Started HTTP polling for redirect synchronization');
+    pollingIntervalId = setInterval(syncRedirectsViaPolling, 5 * 1000); // Зменшено до 5 секунд
+    debugLogger('INFO: Started HTTP polling for redirect synchronization with 5s interval');
 }
 
 startNodePromise = startNodeInternal();
