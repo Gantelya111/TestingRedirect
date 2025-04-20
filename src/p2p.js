@@ -328,7 +328,7 @@ async function fetchBootstrapAddress() {
     ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
     : 'https://libp2p.onrender.com/bootstrap-address';
   const fallbackMultiaddrs = [
-    '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWEAd5Kk9Zftc2uJm8sRzup3fWjiqtV8vKha6xtgj4N5th',
+    '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWR3KXKFteSUA8HRmi9zxQV47GM5ypkduUHxkHwEySoLau',
     '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
     '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH'
   ];
@@ -484,7 +484,9 @@ async function startNodeInternal() {
         debugLogger("INFO: Libp2p node created with ID: %s", node.peerId.toString());
 
         // Додаємо обробник помилок вузла
-        node.on('error', (err) => {
+        // ВИПРАВЛЕННЯ: Замінено node.on на node.addEventListener
+        node.addEventListener('error', (evt) => {
+            const err = evt.detail;
             debugLogger('ERROR: Libp2p node error: %o', err);
             updateP2PStatus(`Node error: ${err.message}`, true);
         });
