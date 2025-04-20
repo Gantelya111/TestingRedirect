@@ -147,22 +147,32 @@ async function startBootstrapNode() {
     const multiaddrs = node.getMultiaddrs().map(ma => ma.toString());
     debugLogger('INFO: Listening on: %o', multiaddrs);
 
-    // Вибираємо WebSocket-адресу для продакшену, TCP для локального
-    const isLocalhost = process.env.NODE_ENV !== 'production';
-    selectedMultiaddr = multiaddrs.find(addr => addr.includes(isLocalhost ? '/tcp/' : '/ws')) || multiaddrs[0];
+    // У продакшені використовуємо публічну адресу з /wss, локально — WebSocket або TCP
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction) {
+      selectedMultiaddr = `/dns4/libp2p.onrender.com/tcp/443/wss/p2p/${node.peerId.toString()}`;
+      debugLogger('INFO: Production mode: Using public multiaddr: %s', selectedMultiaddr);
+    } else {
+      selectedMultiaddr = multiaddrs.find(addr => addr.includes('/ws')) || multiaddrs.find(addr => addr.includes('/tcp/')) || multiaddrs[0];
+      if (selectedMultiaddr && !selectedMultiaddr.includes('/p2p/')) {
+        selectedMultiaddr = `${selectedMultiaddr}/p2p/${node.peerId.toString()}`;
+      }
+      debugLogger('INFO: Local mode: Selected multiaddr: %s', selectedMultiaddr);
+    }
+
     if (!selectedMultiaddr) {
       debugLogger('WARN: No valid multiaddr found, falling back to default');
       selectedMultiaddr = BOOTSTRAP_MULTIADDRS[0];
-    } else if (!selectedMultiaddr.includes('/p2p/')) {
-      selectedMultiaddr = `${selectedMultiaddr}/p2p/${node.peerId.toString()}`;
     }
-    debugLogger('INFO: Selected multiaddr: %s', selectedMultiaddr);
+    debugLogger('INFO: Final selected multiaddr: %s', selectedMultiaddr);
 
     // Підписка на PubSub для синхронізації редиректів
     if (node.services.pubsub) {
       node.services.pubsub.subscribe(topic);
       debugLogger('INFO: Subscribed to PubSub topic: %s', topic);
       node.services.pubsub.addEventListener('message', handlePubsubMessage);
+    } else {
+      debugLogger('WARN: PubSub service not available');
     }
 
     await publishNodeAddress();
@@ -205,7 +215,7 @@ wss.on('connection', (ws) => {
 
 // Налаштування CORS
 app.use(cors({
-  origin: ['https://libp2p.onrender.com', 'https://libp2p.onrender.com'], // Замініть на ваш клієнтський домен
+  origin: ['https://libp2p.onrender.com', 'http://localhost:3000'],
   methods: ['GET', 'OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
