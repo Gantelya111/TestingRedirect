@@ -14,6 +14,12 @@ import { multiaddr } from '@multiformats/multiaddr';
 import { logger } from '@libp2p/logger';
 import { createHash } from 'crypto';
 
+// Увімкнення детальних логів Libp2p
+if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('libp2p:logger', '*:debug');
+    debugLogger('INFO: Enabled detailed Libp2p logging');
+}
+
 // Локальний логер
 const debugLogger = logger('p2p-app');
 
@@ -340,10 +346,15 @@ async function fetchBootstrapAddress() {
     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     const data = await response.json();
     if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-      // Явно форматуємо адресу для обходу проблем із wsurl
+      // Форматуємо адресу для обходу проблем із wsurl
       let modifiedAddr = data.multiaddr;
+      // Замінюємо /wss на /wss/ws, якщо потрібно
       if (modifiedAddr.includes('/wss') && !modifiedAddr.includes('/ws/')) {
         modifiedAddr = modifiedAddr.replace('/wss/p2p/', '/wss/ws/p2p/');
+      }
+      // Додаємо явний шлях /ws, якщо відсутній
+      if (!modifiedAddr.includes('/ws/')) {
+        modifiedAddr = modifiedAddr.replace('/wss', '/wss/ws');
       }
       debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
       debugLogger('INFO: Modified bootstrap address: %s', modifiedAddr);
@@ -353,7 +364,12 @@ async function fetchBootstrapAddress() {
   } catch (err) {
     debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
     debugLogger('INFO: Falling back to public bootstrap nodes');
-    return fallbackMultiaddrs;
+    return fallbackMultiaddrs.map(addr => {
+      if (addr.includes('/wss') && !addr.includes('/ws/')) {
+        return addr.replace('/wss/p2p/', '/wss/ws/p2p/');
+      }
+      return addr;
+    });
   }
 }
 
@@ -406,8 +422,8 @@ function updateP2PStatus(status, isError = false) {
 }
 
 /**
- * Запуск Libp2p вузла з прискореною ініціалізацією
- * @returns {Promise<import('libp2p').Libp2p>}
+ * Ініціалізація та запуск Libp2p-вузла
+ * @returns {Promise<Object>} - Повертає створений вузол
  */
 async function startNodeInternal() {
     debugLogger("INFO: Starting node initialization");
@@ -422,94 +438,44 @@ async function startNodeInternal() {
         return startNodePromise;
     }
 
-    // У функції startNodeInternal
-    debugLogger("INFO: Fetching bootstrap addresses...");
-    // У startNodeInternal
-    // У функції startNodeInternal
-// У функції startNodeInternal
-// У функції startNodeInternal
-const bootstrapMultiaddrs = await fetchBootstrapAddress();
-debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
-
-node = await createLibp2p({
-  addresses: {
-    listen: []
-  },
-  transports: [
-    webSockets({
-      filter: (multiaddr) => {
-        let addrStr = multiaddr.toString();
-        debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
-        // Виправляємо ws:// на wss://
-        if (addrStr.includes('ws://')) {
-          addrStr = addrStr.replace('ws://', 'wss://');
-          debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
-        }
-        // Додаємо /ws, якщо відсутній
-        if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
-          addrStr = addrStr.replace('/wss', '/wss/ws');
-          debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
-        }
-        // Обходимо помилку wsurl із wss//
-        if (addrStr.includes('wss//')) {
-          addrStr = addrStr.replace('wss//', 'wss/');
-          debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
-        }
-        debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
-        return addrStr;
-      }
-    })
-  ],
-  connectionEncryption: [noise()],
-  streamMuxers: [mplex()],
-  peerDiscovery: [
-    bootstrap({
-      list: bootstrapMultiaddrs,
-      timeout: 1000,
-      tagName: 'bootstrap',
-      tagValue: 50,
-      tagTTL: 120000
-    })
-  ],
-  services: {
-    identify: identify(),
-    dht: kadDHT({
-      protocolPrefix: '/p2p-redirect',
-      maxInboundStreams: 1000,
-      maxOutboundStreams: 1000,
-      clientMode: true
-    }),
-    pubsub: gossipsub({
-      allowPublishToZeroTopicPeers: true,
-      globalSignaturePolicy: 'StrictSign'
-    }),
-    ping: ping()
-  }
-});
-window.node = node; // Для дебагу в консолі
-
     nodeInitializationStatus = 'starting';
     updateP2PStatus('Starting...');
 
     try {
-        // Спочатку отримуємо bootstrap-адреси
-        debugLogger("INFO: Fetching bootstrap addresses...");
         const bootstrapMultiaddrs = await fetchBootstrapAddress();
-        debugLogger("INFO: Bootstrap addresses: %o", bootstrapMultiaddrs);
+        debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
 
-        // Легка конфігурація Libp2p з отриманими адресами
-        const config = {
+        node = await createLibp2p({
             addresses: {
-                listen: [] // Вимкнено слухання вхідних з'єднань
+                listen: []
             },
             transports: [
                 webSockets({
                     filter: (multiaddr) => {
-                        const addrStr = multiaddr.toString();
-                        if (addrStr.includes('/wss')) {
-                            debugLogger('INFO: Modifying WebSocket multiaddr to include /ws: %s', addrStr);
-                            return addrStr.replace('/wss', '/wss/ws');
+                        let addrStr = multiaddr.toString();
+                        debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
+                        if (addrStr.includes('ws://')) {
+                            addrStr = addrStr.replace('ws://', 'wss://');
+                            debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
                         }
+                        if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
+                            addrStr = addrStr.replace('/wss', '/wss/ws');
+                            debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
+                        }
+                        if (addrStr.includes('wss//')) {
+                            addrStr = addrStr.replace('wss//', 'wss/');
+                            debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
+                        }
+                        try {
+                            const ma = multiaddr(addrStr);
+                            if (ma.protos().some(p => p.name === 'wss')) {
+                                addrStr = `wss://${ma.nodeAddress().host}/ws`;
+                                debugLogger('INFO: Bypassed multiaddr to direct URL: %s', addrStr);
+                            }
+                        } catch (err) {
+                            debugLogger('ERROR: Failed to parse multiaddr for bypass: %o', err);
+                        }
+                        debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
                         return addrStr;
                     }
                 }),
@@ -523,48 +489,45 @@ window.node = node; // Для дебагу в консолі
                 }),
                 circuitRelayTransport()
             ],
-            streamMuxers: [mplex()],
             connectionEncryption: [noise()],
+            streamMuxers: [mplex()],
             peerDiscovery: [
                 bootstrap({
                     list: bootstrapMultiaddrs,
-                    interval: 10000,
-                    enabled: true
+                    timeout: 1000,
+                    tagName: 'bootstrap',
+                    tagValue: 50,
+                    tagTTL: 120000
                 })
             ],
             services: {
+                identify: identify(),
                 dht: kadDHT({
-                    clientMode: true,
-                    protocol: '/p2p-redirect/kad/1.0.0',
-                    enabled: isCryptoAvailable
+                    protocolPrefix: '/p2p-redirect',
+                    maxInboundStreams: 1000,
+                    maxOutboundStreams: 1000,
+                    clientMode: true
                 }),
                 pubsub: gossipsub({
-                    allowPublishToZeroPeers: true,
-                    emitSelf: true
+                    allowPublishToZeroTopicPeers: true,
+                    globalSignaturePolicy: 'StrictSign'
                 }),
-                identify: identify(),
                 ping: ping()
             },
             connectionManager: {
                 minConnections: 0,
                 maxConnections: 20
             }
-        };
-        debugLogger("INFO: Libp2p config: %o", config);
+        });
 
-        // Створення вузла
-        node = await createLibp2p(config);
-        debugLogger("INFO: Libp2p node created with ID: %s", node.peerId.toString());
+        window.node = node; // Для дебагу в консолі
 
-        // Додаємо обробник помилок вузла
-        // ВИПРАВЛЕННЯ: Замінено node.on на node.addEventListener
         node.addEventListener('error', (evt) => {
             const err = evt.detail;
             debugLogger('ERROR: Libp2p node error: %o', err);
             updateP2PStatus(`Node error: ${err.message}`, true);
         });
 
-        // Реєстрація обробника для статичних файлів
         node.handle(STATIC_FILES_PROTOCOL, async ({ stream, connection }) => {
             try {
                 const filePath = uint8ArrayToString((await stream.source.next()).value.slice());
@@ -582,7 +545,6 @@ window.node = node; // Для дебагу в консолі
             }
         });
 
-        // Додаємо обробники подій
         node.addEventListener('peer:discovery', (evt) => {
             const peerId = evt.detail.id ? evt.detail.id.toString() : 'unknown';
             const multiaddrs = evt.detail.multiaddrs.map(ma => ma.toString());
@@ -600,20 +562,17 @@ window.node = node; // Для дебагу в консолі
             updateP2PStatus(`Disconnected from peer: ${peerId.substring(0, 10)}...`);
         });
 
-        // Запуск вузла
         await node.start();
         nodeInitializationStatus = 'started';
         debugLogger('INFO: Libp2p node started with ID: %s', node.peerId.toString());
         debugLogger('INFO: Node addresses: %o', node.getMultiaddrs().map(ma => ma.toString()));
         debugLogger('INFO: DHT enabled: %o', !!node.services.dht);
 
-        // Паралельне виконання критичних операцій
         const criticalPromises = [];
+        let successfulConnections = 0;
 
-        // 1. Підключення до bootstrap-вузлів
         debugLogger('INFO: Dialing bootstrap nodes: %o', bootstrapMultiaddrs);
         updateP2PStatus('Connecting to network...');
-        let successfulConnections = 0;
         const dialPromises = bootstrapMultiaddrs.map(async (addr) => {
             try {
                 const ma = multiaddr(addr);
@@ -627,16 +586,10 @@ window.node = node; // Для дебагу в консолі
         });
         criticalPromises.push(Promise.all(dialPromises));
 
-        // 2. Публікація адреси вузла
         criticalPromises.push(publishNodeAddress());
-
-        // 3. Завантаження index.html
         criticalPromises.push(loadSiteFromP2P());
-
-        // 4. Публікація статичних файлів
         criticalPromises.push(publishStaticFiles());
 
-        // 5. Підписка на PubSub
         if (node.services.pubsub) {
             node.services.pubsub.subscribe(topic);
             debugLogger("INFO: Subscribed to PubSub topic: %s", topic);
@@ -648,10 +601,8 @@ window.node = node; // Для дебагу в консолі
             startPolling();
         }
 
-        // Очікування завершення критичних операцій
         await Promise.all(criticalPromises);
 
-        // Спроба підключення до вузлів із DHT, якщо bootstrap не вдалися
         if (successfulConnections === 0) {
             debugLogger('WARN: No bootstrap nodes connected, attempting DHT discovery');
             const dhtAddrs = await discoverNodesFromDHT();
@@ -680,14 +631,10 @@ window.node = node; // Для дебагу в консолі
             updateP2PStatus(`Connected to ${successfulConnections} node(s)`);
         }
 
-        // Запуск періодичного перепідключення
         startRepublishing();
 
-        // Фонові операції
         setTimeout(() => {
-            // Періодична публікація адреси
             setInterval(publishNodeAddress, 2 * 60 * 1000);
-            // Періодичне виявлення вузлів
             setInterval(async () => {
                 const newAddrs = await discoverNodesFromDHT();
                 for (const addr of newAddrs) {
@@ -701,7 +648,6 @@ window.node = node; // Для дебагу в консолі
                     }
                 }
             }, 5 * 60 * 1000);
-            // Завантаження некритичних файлів
             loadNonCriticalFiles();
         }, 1000);
 
