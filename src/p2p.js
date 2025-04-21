@@ -431,6 +431,7 @@ async function startNodeInternal() {
     debugLogger("INFO: Fetching bootstrap addresses...");
     // У startNodeInternal
     // У функції startNodeInternal
+// У функції startNodeInternal
 const bootstrapMultiaddrs = await fetchBootstrapAddress();
 debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
 
@@ -443,7 +444,7 @@ node = await createLibp2p({
       filter: (multiaddr) => {
         let addrStr = multiaddr.toString();
         debugLogger('INFO: Filtering WebSocket multiaddr: %s', addrStr);
-        // Виправляємо ws:// на wss:// і додаємо /ws, якщо потрібно
+        // Виправляємо ws:// на wss:// і додаємо /ws
         if (addrStr.includes('ws://')) {
           addrStr = addrStr.replace('ws://', 'wss://');
           debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
