@@ -339,14 +339,19 @@ async function fetchBootstrapAddress() {
     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     const data = await response.json();
     if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-      debugLogger('INFO: Received valid bootstrap address: %s', data.multiaddr);
-      return [data.multiaddr, ...fallbackMultiaddrs];
+      // Явно додаємо /ws до адреси, якщо це WebSocket
+      const modifiedAddr = data.multiaddr.replace('/wss/p2p/', '/wss/ws/p2p/');
+      debugLogger('INFO: Received and modified bootstrap address: %s', modifiedAddr);
+      return [modifiedAddr, ...fallbackMultiaddrs];
     }
     throw new Error('Invalid bootstrap address (local address received)');
   } catch (err) {
     debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
     debugLogger('INFO: Falling back to public bootstrap nodes');
-    return fallbackMultiaddrs;
+    // Модифікуємо fallback-адреси для гарантії
+    return fallbackMultiaddrs.map(addr => 
+      addr.includes('/wss/p2p/') ? addr.replace('/wss/p2p/', '/wss/ws/p2p/') : addr
+    );
   }
 }
 
@@ -414,6 +419,11 @@ async function startNodeInternal() {
         updateP2PStatus('Initialization in progress...');
         return startNodePromise;
     }
+
+    // У функції startNodeInternal
+    debugLogger("INFO: Fetching bootstrap addresses...");
+    const bootstrapMultiaddrs = await fetchBootstrapAddress();
+    debugLogger("INFO: Bootstrap addresses before Libp2p: %o", bootstrapMultiaddrs);
 
     nodeInitializationStatus = 'starting';
     updateP2PStatus('Starting...');
