@@ -14,14 +14,14 @@ import { multiaddr } from '@multiformats/multiaddr';
 import { logger } from '@libp2p/logger';
 import { createHash } from 'crypto';
 
+// Локальний логер
+const debugLogger = logger('p2p-app');
+
 // Увімкнення детальних логів Libp2p
 if (typeof localStorage !== 'undefined') {
     localStorage.setItem('libp2p:logger', '*:debug');
     debugLogger('INFO: Enabled detailed Libp2p logging');
 }
-
-// Локальний логер
-const debugLogger = logger('p2p-app');
 
 // Перевірка середовища
 const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
