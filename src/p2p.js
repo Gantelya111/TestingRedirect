@@ -224,6 +224,9 @@ async function requestStaticFile(filePath) {
 /**
  * Завантаження критичного файлу (index.html) з P2P мережі
  */
+/**
+ * Завантаження критичного файлу (index.html) з P2P мережі
+ */
 async function loadSiteFromP2P() {
     const criticalFile = 'index.html';
     if (!localStorage.getItem(`site-file:${criticalFile}`)) {
@@ -425,6 +428,10 @@ function updateP2PStatus(status, isError = false) {
  * Ініціалізація та запуск Libp2p-вузла
  * @returns {Promise<Object>} - Повертає створений вузол
  */
+/**
+ * Ініціалізація та запуск Libp2p-вузла
+ * @returns {Promise<Object>} - Повертає створений вузол
+ */
 async function startNodeInternal() {
     debugLogger("INFO: Starting node initialization");
     if (node && node.status === 'started') {
@@ -454,26 +461,29 @@ async function startNodeInternal() {
                     filter: (multiaddr) => {
                         let addrStr = multiaddr.toString();
                         debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
+                        // Замінюємо ws:// на wss://
                         if (addrStr.includes('ws://')) {
                             addrStr = addrStr.replace('ws://', 'wss://');
                             debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
                         }
+                        // Додаємо /ws, якщо потрібно
                         if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
-                            addrStr = addrStr.replace('/wss', '/wss/ws');
+                            addrStr = addrStr.replace('/wss/p2p/', '/wss/ws/p2p/');
                             debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
                         }
+                        // Видаляємо подвійні слеші
                         if (addrStr.includes('wss//')) {
                             addrStr = addrStr.replace('wss//', 'wss/');
                             debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
                         }
+                        // Формуємо чисту wss-адресу
                         try {
                             const ma = multiaddr(addrStr);
-                            if (ma.protos().some(p => p.name === 'wss')) {
-                                addrStr = `wss://${ma.nodeAddress().host}/ws`;
-                                debugLogger('INFO: Bypassed multiaddr to direct URL: %s', addrStr);
-                            }
+                            const host = ma.nodeAddress().host;
+                            addrStr = `wss://${host}/ws/p2p/${ma.getPeerId() || ''}`;
+                            debugLogger('INFO: Formatted WebSocket multiaddr: %s', addrStr);
                         } catch (err) {
-                            debugLogger('ERROR: Failed to parse multiaddr for bypass: %o', err);
+                            debugLogger('ERROR: Failed to parse multiaddr: %o', err);
                         }
                         debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
                         return addrStr;
