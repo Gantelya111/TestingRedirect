@@ -340,7 +340,7 @@ async function fetchBootstrapAddress() {
     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     const data = await response.json();
     if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-      // Форматуємо адресу для WSS із шляхом /ws
+      // Явно форматуємо адресу для обходу проблем із wsurl
       let modifiedAddr = data.multiaddr;
       if (modifiedAddr.includes('/wss') && !modifiedAddr.includes('/ws/')) {
         modifiedAddr = modifiedAddr.replace('/wss/p2p/', '/wss/ws/p2p/');
@@ -353,12 +353,7 @@ async function fetchBootstrapAddress() {
   } catch (err) {
     debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
     debugLogger('INFO: Falling back to public bootstrap nodes');
-    return fallbackMultiaddrs.map(addr => {
-      if (addr.includes('/wss/p2p/') && !addr.includes('/ws/')) {
-        return addr.replace('/wss/p2p/', '/wss/ws/p2p/');
-      }
-      return addr;
-    });
+    return fallbackMultiaddrs;
   }
 }
 
@@ -432,6 +427,7 @@ async function startNodeInternal() {
     // У startNodeInternal
     // У функції startNodeInternal
 // У функції startNodeInternal
+// У функції startNodeInternal
 const bootstrapMultiaddrs = await fetchBootstrapAddress();
 debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
 
@@ -443,16 +439,23 @@ node = await createLibp2p({
     webSockets({
       filter: (multiaddr) => {
         let addrStr = multiaddr.toString();
-        debugLogger('INFO: Filtering WebSocket multiaddr: %s', addrStr);
-        // Виправляємо ws:// на wss:// і додаємо /ws
+        debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
+        // Виправляємо ws:// на wss://
         if (addrStr.includes('ws://')) {
           addrStr = addrStr.replace('ws://', 'wss://');
           debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
         }
+        // Додаємо /ws, якщо відсутній
         if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
           addrStr = addrStr.replace('/wss', '/wss/ws');
           debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
         }
+        // Обходимо помилку wsurl із wss//
+        if (addrStr.includes('wss//')) {
+          addrStr = addrStr.replace('wss//', 'wss/');
+          debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
+        }
+        debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
         return addrStr;
       }
     })
@@ -483,6 +486,7 @@ node = await createLibp2p({
     ping: ping()
   }
 });
+window.node = node; // Для дебагу в консолі
 
     nodeInitializationStatus = 'starting';
     updateP2PStatus('Starting...');
