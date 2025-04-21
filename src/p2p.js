@@ -339,11 +339,9 @@ async function fetchBootstrapAddress() {
     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     const data = await response.json();
     if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-      // Перетворюємо multiaddr у формат, який wsurl коректно обробить
+      // Форматуємо адресу так, щоб wsurl не зіпсував її
       let modifiedAddr = data.multiaddr;
-      if (modifiedAddr.includes('/wss/p2p/')) {
-        modifiedAddr = modifiedAddr.replace('/wss/p2p/', '/wss/ws/p2p/');
-      } else if (modifiedAddr.includes('/wss')) {
+      if (modifiedAddr.includes('/wss') && !modifiedAddr.includes('/ws/')) {
         modifiedAddr = modifiedAddr.replace('/wss', '/wss/ws');
       }
       debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
@@ -354,13 +352,7 @@ async function fetchBootstrapAddress() {
   } catch (err) {
     debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
     debugLogger('INFO: Falling back to public bootstrap nodes');
-    // Модифікуємо fallback-адреси
-    return fallbackMultiaddrs.map(addr => {
-      if (addr.includes('/wss/p2p/')) {
-        return addr.includes('/wss/ws/p2p/') ? addr : addr.replace('/wss/p2p/', '/wss/ws/p2p/');
-      }
-      return addr;
-    });
+    return fallbackMultiaddrs;
   }
 }
 
@@ -432,28 +424,57 @@ async function startNodeInternal() {
     // У функції startNodeInternal
     debugLogger("INFO: Fetching bootstrap addresses...");
     // У startNodeInternal
-    const bootstrapMultiaddrs = await fetchBootstrapAddress();
-    debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
+    // У функції startNodeInternal
+const bootstrapMultiaddrs = await fetchBootstrapAddress();
+debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
 
-    node = await createLibp2p({
-      addresses: {
-         listen: []
+node = await createLibp2p({
+  addresses: {
+    listen: []
   },
   transports: [
     webSockets({
       filter: (multiaddr) => {
-        const addrStr = multiaddr.toString();
+        let addrStr = multiaddr.toString();
         debugLogger('INFO: Filtering WebSocket multiaddr: %s', addrStr);
+        // Виправляємо ws:// на wss:// і додаємо /ws, якщо потрібно
+        if (addrStr.includes('ws://')) {
+          addrStr = addrStr.replace('ws://', 'wss://');
+          debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
+        }
         if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
-          const modified = addrStr.replace('/wss', '/wss/ws');
-          debugLogger('INFO: Modified WebSocket multiaddr to: %s', modified);
-          return modified;
+          addrStr = addrStr.replace('/wss', '/wss/ws');
+          debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
         }
         return addrStr;
       }
     })
   ],
-  // ... решта конфігурації
+  connectionEncryption: [noise()],
+  streamMuxers: [mplex()],
+  peerDiscovery: [
+    bootstrap({
+      list: bootstrapMultiaddrs,
+      timeout: 1000,
+      tagName: 'bootstrap',
+      tagValue: 50,
+      tagTTL: 120000
+    })
+  ],
+  services: {
+    identify: identify(),
+    dht: kadDHT({
+      protocolPrefix: '/p2p-redirect',
+      maxInboundStreams: 1000,
+      maxOutboundStreams: 1000,
+      clientMode: true
+    }),
+    pubsub: gossipsub({
+      allowPublishToZeroTopicPeers: true,
+      globalSignaturePolicy: 'StrictSign'
+    }),
+    ping: ping()
+  }
 });
 
     nodeInitializationStatus = 'starting';
