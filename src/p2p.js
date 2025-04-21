@@ -324,6 +324,7 @@ async function publishStaticFiles() {
  * @returns {Promise<string[]>}
  */
 async function fetchBootstrapAddress() {
+  const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
   const bootstrapUrl = isLocalhost
     ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
     : 'https://libp2p.onrender.com/bootstrap-address';
@@ -339,10 +340,10 @@ async function fetchBootstrapAddress() {
     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     const data = await response.json();
     if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-      // Форматуємо адресу так, щоб wsurl не зіпсував її
+      // Форматуємо адресу для WSS із шляхом /ws
       let modifiedAddr = data.multiaddr;
       if (modifiedAddr.includes('/wss') && !modifiedAddr.includes('/ws/')) {
-        modifiedAddr = modifiedAddr.replace('/wss', '/wss/ws');
+        modifiedAddr = modifiedAddr.replace('/wss/p2p/', '/wss/ws/p2p/');
       }
       debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
       debugLogger('INFO: Modified bootstrap address: %s', modifiedAddr);
@@ -352,7 +353,12 @@ async function fetchBootstrapAddress() {
   } catch (err) {
     debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
     debugLogger('INFO: Falling back to public bootstrap nodes');
-    return fallbackMultiaddrs;
+    return fallbackMultiaddrs.map(addr => {
+      if (addr.includes('/wss/p2p/') && !addr.includes('/ws/')) {
+        return addr.replace('/wss/p2p/', '/wss/ws/p2p/');
+      }
+      return addr;
+    });
   }
 }
 
