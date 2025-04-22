@@ -340,16 +340,18 @@ async function fetchBootstrapAddress() {
     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     const data = await response.json();
     if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-      // Явно форматуємо адресу для обходу проблем із wsurl
       let modifiedAddr = data.multiaddr;
-      if (modifiedAddr.includes('/wss') && !modifiedAddr.includes('/ws/')) {
+      // Переконуємося, що адреса має правильний формат
+      if (!modifiedAddr.includes('/wss/ws/')) {
         modifiedAddr = modifiedAddr.replace('/wss/p2p/', '/wss/ws/p2p/');
       }
-      debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
-      debugLogger('INFO: Modified bootstrap address: %s', modifiedAddr);
+      if (modifiedAddr.includes('wss//')) {
+        modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
+      }
+      debugLogger('INFO: Received and modified bootstrap address: %s', modifiedAddr);
       return [modifiedAddr, ...fallbackMultiaddrs];
     }
-    throw new Error('Invalid bootstrap address (local address received)');
+    throw new Error('Invalid bootstrap address');
   } catch (err) {
     debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
     debugLogger('INFO: Falling back to public bootstrap nodes');
@@ -437,28 +439,32 @@ node = await createLibp2p({
   },
   transports: [
     webSockets({
-      filter: (multiaddr) => {
-        let addrStr = multiaddr.toString();
-        debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
-        // Виправляємо ws:// на wss://
-        if (addrStr.includes('ws://')) {
-          addrStr = addrStr.replace('ws://', 'wss://');
-          debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
-        }
-        // Додаємо /ws, якщо відсутній
-        if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
-          addrStr = addrStr.replace('/wss', '/wss/ws');
-          debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
-        }
-        // Обходимо помилку wsurl із wss//
-        if (addrStr.includes('wss//')) {
-          addrStr = addrStr.replace('wss//', 'wss/');
-          debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
-        }
-        debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
-        return addrStr;
-      }
-    })
+  filter: (multiaddr) => {
+    let addrStr = multiaddr.toString();
+    debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
+    
+    // Переконуємося, що використовується wss:// у продакшені
+    if (addrStr.includes('ws://')) {
+      addrStr = addrStr.replace('ws://', 'wss://');
+      debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
+    }
+    
+    // Додаємо /ws, якщо потрібно
+    if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
+      addrStr = addrStr.replace('/wss', '/wss/ws');
+      debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
+    }
+    
+    // Видаляємо подвійні слеші або помилки wss//
+    if (addrStr.includes('wss//')) {
+      addrStr = addrStr.replace('wss//', 'wss/');
+      debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
+    }
+    
+    debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
+    return addrStr;
+  }
+})
   ],
   connectionEncryption: [noise()],
   streamMuxers: [mplex()],
