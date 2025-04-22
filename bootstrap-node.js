@@ -254,8 +254,13 @@ app.get('/health', (req, res) => {
 // Ендпоінт для bootstrap-адреси
 app.get('/bootstrap-address', (req, res) => {
   if (node && node.status === 'started' && selectedMultiaddr) {
-    debugLogger('INFO: Serving bootstrap address: %s', selectedMultiaddr);
-    res.json({ multiaddr: selectedMultiaddr });
+    // У продакшені явно вказуємо wss://
+    const isProduction = process.env.NODE_ENV === 'production';
+    const finalMultiaddr = isProduction
+      ? `/dns4/libp2p.onrender.com/tcp/443/wss/ws/p2p/${node.peerId.toString()}`
+      : selectedMultiaddr;
+    debugLogger('INFO: Serving bootstrap address: %s', finalMultiaddr);
+    res.json({ multiaddr: finalMultiaddr });
   } else {
     debugLogger('ERROR: Bootstrap node not started or multiaddr not set');
     res.status(500).json({ error: 'Bootstrap node not started' });
