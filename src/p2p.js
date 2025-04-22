@@ -336,71 +336,14 @@ async function publishStaticFiles() {
  * Отримання адреси bootstrap-вузла
  * @returns {Promise<string[]>}
  */
+/**
+ * Отримання адреси bootstrap-вузла
+ * @returns {Promise<string[]>}
+ */
 async function fetchBootstrapAddress() {
-    const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-    const bootstrapUrl = isLocalhost
-        ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
-        : 'https://libp2p.onrender.com/bootstrap-address';
-    const fallbackMultiaddrs = [
-        '/dns4/libp2p.onrender.com/tcp/443/wss/ws/p2p/12D3KooWR3KXKFteSUA8HRmi9zxQV47GM5ypkduUHxkHwEySoLau',
-        '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-        '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH'
-    ];
-
-    try {
-        debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
-        const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
-        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-        const data = await response.json();
-        if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-            let modifiedAddr = data.multiaddr;
-            // Переконуємося, що використовується wss://
-            if (modifiedAddr.includes('ws://')) {
-                modifiedAddr = modifiedAddr.replace('ws://', 'wss://');
-                debugLogger('INFO: Replaced ws:// with wss://: %s', modifiedAddr);
-            }
-            // Додаємо /ws, якщо відсутній
-            if (modifiedAddr.includes('/wss') && !modifiedAddr.includes('/ws/')) {
-                modifiedAddr = modifiedAddr.replace('/wss/p2p/', '/wss/ws/p2p/');
-                debugLogger('INFO: Added /ws to bootstrap address: %s', modifiedAddr);
-            }
-            // Усуваємо подвійні слеші
-            if (modifiedAddr.includes('wss//')) {
-                modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
-                debugLogger('INFO: Fixed wss// to wss/: %s', modifiedAddr);
-            }
-            // Формуємо чисту адресу
-            try {
-                const ma = multiaddr(modifiedAddr);
-                const host = ma.nodeAddress().host;
-                modifiedAddr = `wss://${host}/ws/p2p/${ma.getPeerId() || ''}`;
-                debugLogger('INFO: Formatted bootstrap address: %s', modifiedAddr);
-            } catch (err) {
-                debugLogger('ERROR: Failed to parse bootstrap multiaddr: %o', err);
-            }
-            debugLogger('INFO: Final bootstrap address: %s', modifiedAddr);
-            return [modifiedAddr, ...fallbackMultiaddrs];
-        }
-        throw new Error('Invalid bootstrap address (local address received)');
-    } catch (err) {
-        debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
-        debugLogger('INFO: Falling back to public bootstrap nodes');
-        return fallbackMultiaddrs.map(addr => {
-            if (addr.includes('ws://')) {
-                addr = addr.replace('ws://', 'wss://');
-                debugLogger('INFO: Replaced ws:// with wss:// in fallback: %s', addr);
-            }
-            if (addr.includes('/wss') && !addr.includes('/ws/')) {
-                addr = addr.replace('/wss/p2p/', '/wss/ws/p2p/');
-                debugLogger('INFO: Added /ws to fallback address: %s', addr);
-            }
-            if (addr.includes('wss//')) {
-                addr = addr.replace('wss//', 'wss/');
-                debugLogger('INFO: Fixed wss// to wss/ in fallback: %s', addr);
-            }
-            return addr;
-        });
-    }
+    const bootstrapAddress = '/dns4/libp2p.onrender.com/tcp/443/p2p/12D3KooWR3KXKFteSUA8HRmi9zxQV47GM5ypkduUHxkHwEySoLau';
+    debugLogger('INFO: Using WebRTC-compatible bootstrap address: %s', bootstrapAddress);
+    return [bootstrapAddress];
 }
 
 /**
@@ -463,6 +406,10 @@ function updateP2PStatus(status, isError = false) {
  * Ініціалізація та запуск Libp2p-вузла
  * @returns {Promise<Object>} - Повертає створений вузол
  */
+/**
+ * Ініціалізація та запуск Libp2p-вузла
+ * @returns {Promise<Object>} - Повертає створений вузол
+ */
 async function startNodeInternal() {
     debugLogger("INFO: Starting node initialization");
     if (node && node.status === 'started') {
@@ -488,47 +435,12 @@ async function startNodeInternal() {
                 listen: []
             },
             transports: [
-                webSockets({
-                    filter: (multiaddr) => {
-                        let addrStr = multiaddr.toString();
-                        debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
-                        // Замінюємо ws:// на wss://
-                        if (addrStr.includes('ws://')) {
-                            addrStr = addrStr.replace('ws://', 'wss://');
-                            debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
-                        }
-                        // Додаємо /ws, якщо потрібно
-                        if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
-                            addrStr = addrStr.replace('/wss/p2p/', '/wss/ws/p2p/');
-                            debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
-                        }
-                        // Усуваємо подвійні слеші
-                        if (addrStr.includes('wss//')) {
-                            addrStr = addrStr.replace('wss//', 'wss/');
-                            debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
-                        }
-                        // Формуємо чисту wss-адресу
-                        try {
-                            const ma = multiaddr(addrStr);
-                            const host = ma.nodeAddress().host;
-                            const peerId = ma.getPeerId() || '';
-                            addrStr = `wss://${host}/ws/p2p/${peerId}`;
-                            debugLogger('INFO: Formatted WebSocket multiaddr: %s', addrStr);
-                        } catch (err) {
-                            debugLogger('ERROR: Failed to parse multiaddr: %o', err);
-                            // Повертаємо безпечну адресу за замовчуванням
-                            addrStr = `wss://libp2p.onrender.com/ws/p2p/`;
-                            debugLogger('INFO: Fallback to default WebSocket multiaddr: %s', addrStr);
-                        }
-                        debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
-                        return addrStr;
-                    }
-                }),
                 webRTC({
                     rtcConfiguration: {
                         iceServers: [
                             { urls: 'stun:stun.l.google.com:19302' },
-                            { urls: 'stun:stun1.l.google.com:19302' }
+                            { urls: 'stun:stun1.l.google.com:19302' },
+                            { urls: 'stun:stun2.l.google.com:19302' }
                         ]
                     }
                 }),
