@@ -424,304 +424,228 @@ async function startNodeInternal() {
         return startNodePromise;
     }
 
-    // У функції startNodeInternal
-    debugLogger("INFO: Fetching bootstrap addresses...");
-    // У startNodeInternal
-    // У функції startNodeInternal
-// У функції startNodeInternal
-// У функції startNodeInternal
-const bootstrapMultiaddrs = await fetchBootstrapAddress();
-debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
-
-node = await createLibp2p({
-  addresses: {
-    listen: []
-  },
-  transports: [
-    webSockets({
-  filter: (multiaddr) => {
-    let addrStr = multiaddr.toString();
-    debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
-    
-    // Переконуємося, що використовується wss:// у продакшені
-    if (addrStr.includes('ws://')) {
-      addrStr = addrStr.replace('ws://', 'wss://');
-      debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
-    }
-    
-    // Додаємо /ws, якщо потрібно
-    if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
-      addrStr = addrStr.replace('/wss', '/wss/ws');
-      debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
-    }
-    
-    // Видаляємо подвійні слеші або помилки wss//
-    if (addrStr.includes('wss//')) {
-      addrStr = addrStr.replace('wss//', 'wss/');
-      debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
-    }
-    
-    debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
-    return addrStr;
-  }
-})
-  ],
-  connectionEncryption: [noise()],
-  streamMuxers: [mplex()],
-  peerDiscovery: [
-    bootstrap({
-      list: bootstrapMultiaddrs,
-      timeout: 1000,
-      tagName: 'bootstrap',
-      tagValue: 50,
-      tagTTL: 120000
-    })
-  ],
-  services: {
-    identify: identify(),
-    dht: kadDHT({
-      protocolPrefix: '/p2p-redirect',
-      maxInboundStreams: 1000,
-      maxOutboundStreams: 1000,
-      clientMode: true
-    }),
-    pubsub: gossipsub({
-      allowPublishToZeroTopicPeers: true,
-      globalSignaturePolicy: 'StrictSign'
-    }),
-    ping: ping()
-  }
-});
-window.node = node; // Для дебагу в консолі
-
     nodeInitializationStatus = 'starting';
-    updateP2PStatus('Starting...');
+    startNodePromise = (async () => {
+        try {
+            // Спочатку отримуємо bootstrap-адреси
+            debugLogger("INFO: Fetching bootstrap addresses...");
+            const bootstrapMultiaddrs = await fetchBootstrapAddress();
+            debugLogger("INFO: Bootstrap addresses: %o", bootstrapMultiaddrs);
 
-    try {
-        // Спочатку отримуємо bootstrap-адреси
-        debugLogger("INFO: Fetching bootstrap addresses...");
-        const bootstrapMultiaddrs = await fetchBootstrapAddress();
-        debugLogger("INFO: Bootstrap addresses: %o", bootstrapMultiaddrs);
-
-        // Легка конфігурація Libp2p з отриманими адресами
-        const config = {
-            addresses: {
-                listen: [] // Вимкнено слухання вхідних з'єднань
-            },
-            transports: [
-                webSockets({
-                    filter: (multiaddr) => {
-                        const addrStr = multiaddr.toString();
-                        if (addrStr.includes('/wss')) {
-                            debugLogger('INFO: Modifying WebSocket multiaddr to include /ws: %s', addrStr);
-                            return addrStr.replace('/wss', '/wss/ws');
+            // Конфігурація Libp2p
+            const config = {
+                addresses: {
+                    listen: [] // Вимкнено слухання вхідних з'єднань
+                },
+                transports: [
+                    webSockets({
+                        filter: filters.dnsWss
+                    }),
+                    webRTC({
+                        rtcConfiguration: {
+                            iceServers: [
+                                { urls: 'stun:stun.l.google.com:19302' },
+                                { urls: 'stun:stun1.l.google.com:19302' }
+                            ]
                         }
-                        return addrStr;
+                    }),
+                    circuitRelayTransport()
+                ],
+                streamMuxers: [mplex()],
+                connectionEncryption: [noise()],
+                peerDiscovery: [
+                    bootstrap({
+                        list: bootstrapMultiaddrs,
+                        interval: 10000,
+                        enabled: true
+                    })
+                ],
+                services: {
+                    dht: kadDHT({
+                        clientMode: true,
+                        protocol: '/p2p-redirect/kad/1.0.0',
+                        enabled: isCryptoAvailable
+                    }),
+                    pubsub: gossipsub({
+                        allowPublishToZeroPeers: true,
+                        emitSelf: true
+                    }),
+                    identify: identify(),
+                    ping: ping()
+                },
+                connectionManager: {
+                    minConnections: 0,
+                    maxConnections: 20
+                }
+            };
+            debugLogger("INFO: Libp2p config: %o", config);
+
+            // Створення вузла
+            node = await createLibp2p(config);
+            window.node = node; // Для дебагу в консолі
+            debugLogger("INFO: Libp2p node created with ID: %s", node.peerId.toString());
+
+            // Додаємо обробник помилок вузла
+            node.addEventListener('error', (evt) => {
+                const err = evt.detail;
+                debugLogger('ERROR: Libp2p node error: %o', err);
+                updateP2PStatus(`Node error: ${err.message}`, true);
+            });
+
+            // Реєстрація обробника для статичних файлів
+            node.handle(STATIC_FILES_PROTOCOL, async ({ stream, connection }) => {
+                try {
+                    const filePath = uint8ArrayToString((await stream.source.next()).value.slice());
+                    const content = localStorage.getItem(`site-file:${filePath}`);
+                    if (content) {
+                        await stream.sink([uint8ArrayFromString(content)]);
+                        debugLogger('INFO: Served static file %s to peer %s', filePath, connection.remotePeer.toString());
+                    } else {
+                        await stream.close();
+                        debugLogger('WARN: File %s not found for peer %s', filePath, connection.remotePeer.toString());
                     }
-                }),
-                webRTC({
-                    rtcConfiguration: {
-                        iceServers: [
-                            { urls: 'stun:stun.l.google.com:19302' },
-                            { urls: 'stun:stun1.l.google.com:19302' }
-                        ]
-                    }
-                }),
-                circuitRelayTransport()
-            ],
-            streamMuxers: [mplex()],
-            connectionEncryption: [noise()],
-            peerDiscovery: [
-                bootstrap({
-                    list: bootstrapMultiaddrs,
-                    interval: 10000,
-                    enabled: true
-                })
-            ],
-            services: {
-                dht: kadDHT({
-                    clientMode: true,
-                    protocol: '/p2p-redirect/kad/1.0.0',
-                    enabled: isCryptoAvailable
-                }),
-                pubsub: gossipsub({
-                    allowPublishToZeroPeers: true,
-                    emitSelf: true
-                }),
-                identify: identify(),
-                ping: ping()
-            },
-            connectionManager: {
-                minConnections: 0,
-                maxConnections: 20
-            }
-        };
-        debugLogger("INFO: Libp2p config: %o", config);
-
-        // Створення вузла
-        node = await createLibp2p(config);
-        debugLogger("INFO: Libp2p node created with ID: %s", node.peerId.toString());
-
-        // Додаємо обробник помилок вузла
-        // ВИПРАВЛЕННЯ: Замінено node.on на node.addEventListener
-        node.addEventListener('error', (evt) => {
-            const err = evt.detail;
-            debugLogger('ERROR: Libp2p node error: %o', err);
-            updateP2PStatus(`Node error: ${err.message}`, true);
-        });
-
-        // Реєстрація обробника для статичних файлів
-        node.handle(STATIC_FILES_PROTOCOL, async ({ stream, connection }) => {
-            try {
-                const filePath = uint8ArrayToString((await stream.source.next()).value.slice());
-                const content = localStorage.getItem(`site-file:${filePath}`);
-                if (content) {
-                    await stream.sink([uint8ArrayFromString(content)]);
-                    debugLogger('INFO: Served static file %s to peer %s', filePath, connection.remotePeer.toString());
-                } else {
+                } catch (err) {
+                    debugLogger('ERROR: Failed to handle static file request: %o', err);
                     await stream.close();
-                    debugLogger('WARN: File %s not found for peer %s', filePath, connection.remotePeer.toString());
                 }
-            } catch (err) {
-                debugLogger('ERROR: Failed to handle static file request: %o', err);
-                await stream.close();
-            }
-        });
+            });
 
-        // Додаємо обробники подій
-        node.addEventListener('peer:discovery', (evt) => {
-            const peerId = evt.detail.id ? evt.detail.id.toString() : 'unknown';
-            const multiaddrs = evt.detail.multiaddrs.map(ma => ma.toString());
-            debugLogger('INFO: Discovered peer: %s with multiaddrs: %o', peerId, multiaddrs);
-            updateP2PStatus(`Discovered peer: ${peerId.substring(0, 10)}...`);
-        });
-        node.addEventListener('peer:connect', (evt) => {
-            const peerId = evt.detail.toString();
-            debugLogger('INFO: Connected to peer: %s', peerId);
-            updateP2PStatus(`Connected to peer: ${peerId.substring(0, 10)}...`);
-        });
-        node.addEventListener('peer:disconnect', (evt) => {
-            const peerId = evt.detail.toString();
-            debugLogger('INFO: Disconnected from peer: %s', peerId);
-            updateP2PStatus(`Disconnected from peer: ${peerId.substring(0, 10)}...`);
-        });
+            // Додаємо обробники подій
+            node.addEventListener('peer:discovery', (evt) => {
+                const peerId = evt.detail.id ? evt.detail.id.toString() : 'unknown';
+                const multiaddrs = evt.detail.multiaddrs.map(ma => ma.toString());
+                debugLogger('INFO: Discovered peer: %s with multiaddrs: %o', peerId, multiaddrs);
+                updateP2PStatus(`Discovered peer: ${peerId.substring(0, 10)}...`);
+            });
+            node.addEventListener('peer:connect', (evt) => {
+                const peerId = evt.detail.toString();
+                debugLogger('INFO: Connected to peer: %s', peerId);
+                updateP2PStatus(`Connected to peer: ${peerId.substring(0, 10)}...`);
+            });
+            node.addEventListener('peer:disconnect', (evt) => {
+                const peerId = evt.detail.toString();
+                debugLogger('INFO: Disconnected from peer: %s', peerId);
+                updateP2PStatus(`Disconnected from peer: ${peerId.substring(0, 10)}...`);
+            });
 
-        // Запуск вузла
-        await node.start();
-        nodeInitializationStatus = 'started';
-        debugLogger('INFO: Libp2p node started with ID: %s', node.peerId.toString());
-        debugLogger('INFO: Node addresses: %o', node.getMultiaddrs().map(ma => ma.toString()));
-        debugLogger('INFO: DHT enabled: %o', !!node.services.dht);
+            // Запуск вузла
+            await node.start();
+            nodeInitializationStatus = 'started';
+            debugLogger('INFO: Libp2p node started with ID: %s', node.peerId.toString());
+            debugLogger('INFO: Node addresses: %o', node.getMultiaddrs().map(ma => ma.toString()));
+            debugLogger('INFO: DHT enabled: %o', !!node.services.dht);
 
-        // Паралельне виконання критичних операцій
-        const criticalPromises = [];
+            // Паралельне виконання критичних операцій
+            const criticalPromises = [];
 
-        // 1. Підключення до bootstrap-вузлів
-        debugLogger('INFO: Dialing bootstrap nodes: %o', bootstrapMultiaddrs);
-        updateP2PStatus('Connecting to network...');
-        let successfulConnections = 0;
-        const dialPromises = bootstrapMultiaddrs.map(async (addr) => {
-            try {
-                const ma = multiaddr(addr);
-                debugLogger('INFO: Attempting to dial bootstrap node: %s', addr);
-                await node.dial(ma, { timeout: 3000 });
-                debugLogger('INFO: Successfully dialed bootstrap node: %s', addr);
-                successfulConnections++;
-            } catch (err) {
-                debugLogger('ERROR: Failed to dial bootstrap node %s: %o', addr, err);
-            }
-        });
-        criticalPromises.push(Promise.all(dialPromises));
-
-        // 2. Публікація адреси вузла
-        criticalPromises.push(publishNodeAddress());
-
-        // 3. Завантаження index.html
-        criticalPromises.push(loadSiteFromP2P());
-
-        // 4. Публікація статичних файлів
-        criticalPromises.push(publishStaticFiles());
-
-        // 5. Підписка на PubSub
-        if (node.services.pubsub) {
-            node.services.pubsub.subscribe(topic);
-            debugLogger("INFO: Subscribed to PubSub topic: %s", topic);
-            node.services.pubsub.addEventListener('message', handlePubsubMessage);
-            updateP2PStatus('PubSub subscribed');
-        } else {
-            debugLogger('ERROR: PubSub service is not available, falling back to HTTP polling');
-            updateP2PStatus('PubSub unavailable, using HTTP polling', true);
-            startPolling();
-        }
-
-        // Очікування завершення критичних операцій
-        await Promise.all(criticalPromises);
-
-        // Спроба підключення до вузлів із DHT, якщо bootstrap не вдалися
-        if (successfulConnections === 0) {
-            debugLogger('WARN: No bootstrap nodes connected, attempting DHT discovery');
-            const dhtAddrs = await discoverNodesFromDHT();
-            if (dhtAddrs.length > 0) {
-                const dhtDialPromises = dhtAddrs.map(async (addr) => {
-                    try {
-                        const ma = multiaddr(addr);
-                        debugLogger('INFO: Attempting to dial DHT node: %s', addr);
-                        await node.dial(ma, { timeout: 3000 });
-                        debugLogger('INFO: Successfully dialed DHT node: %s', addr);
-                        successfulConnections++;
-                    } catch (err) {
-                        debugLogger('ERROR: Failed to dial DHT node %s: %o', addr, err);
-                    }
-                });
-                await Promise.all(dhtDialPromises);
-            }
-        }
-
-        if (successfulConnections === 0) {
-            debugLogger("WARN: No connections established, enabling HTTP polling");
-            updateP2PStatus('No network connection, using HTTP polling', true);
-            startPolling();
-        } else {
-            debugLogger('INFO: Connected to %d node(s)', successfulConnections);
-            updateP2PStatus(`Connected to ${successfulConnections} node(s)`);
-        }
-
-        // Запуск періодичного перепідключення
-        startRepublishing();
-
-        // Фонові операції
-        setTimeout(() => {
-            // Періодична публікація адреси
-            setInterval(publishNodeAddress, 2 * 60 * 1000);
-            // Періодичне виявлення вузлів
-            setInterval(async () => {
-                const newAddrs = await discoverNodesFromDHT();
-                for (const addr of newAddrs) {
-                    try {
-                        const ma = multiaddr(addr);
-                        debugLogger('INFO: Attempting to dial discovered node: %s', addr);
-                        await node.dial(ma, { timeout: 3000 });
-                        debugLogger('INFO: Successfully dialed discovered node: %s', addr);
-                    } catch (err) {
-                        debugLogger('ERROR: Failed to dial discovered node %s: %o', addr, err);
-                    }
+            // 1. Підключення до bootstrap-вузлів
+            debugLogger('INFO: Dialing bootstrap nodes: %o', bootstrapMultiaddrs);
+            updateP2PStatus('Connecting to network...');
+            let successfulConnections = 0;
+            const dialPromises = bootstrapMultiaddrs.map(async (addr) => {
+                try {
+                    const ma = multiaddr(addr);
+                    debugLogger('INFO: Attempting to dial bootstrap node: %s', addr);
+                    await node.dial(ma, { timeout: 3000 });
+                    debugLogger('INFO: Successfully dialed bootstrap node: %s', addr);
+                    successfulConnections++;
+                } catch (err) {
+                    debugLogger('ERROR: Failed to dial bootstrap node %s: %o', addr, err);
                 }
-            }, 5 * 60 * 1000);
-            // Завантаження некритичних файлів
-            loadNonCriticalFiles();
-        }, 1000);
+            });
+            criticalPromises.push(Promise.all(dialPromises));
 
-        debugLogger("INFO: Node initialization completed");
-        updateP2PStatus('Ready');
-        return node;
-    } catch (error) {
-        debugLogger(`ERROR: Node initialization failed: %o`, error);
-        nodeInitializationStatus = 'failed';
-        updateP2PStatus(`Failed to start: ${error.message}`, true);
-        node = null;
-        startPolling();
-        throw error;
-    }
+            // 2. Публікація адреси вузла
+            criticalPromises.push(publishNodeAddress());
+
+            // 3. Завантаження index.html
+            criticalPromises.push(loadSiteFromP2P());
+
+            // 4. Публікація статичних файлів
+            criticalPromises.push(publishStaticFiles());
+
+            // 5. Підписка на PubSub
+            if (node.services.pubsub) {
+                node.services.pubsub.subscribe(topic);
+                debugLogger("INFO: Subscribed to PubSub topic: %s", topic);
+                node.services.pubsub.addEventListener('message', handlePubsubMessage);
+                updateP2PStatus('PubSub subscribed');
+            } else {
+                debugLogger('ERROR: PubSub service is not available, falling back to HTTP polling');
+                updateP2PStatus('PubSub unavailable, using HTTP polling', true);
+                startPolling();
+            }
+
+            // Очікування завершення критичних операцій
+            await Promise.all(criticalPromises);
+
+            // Спроба підключення до вузлів із DHT, якщо bootstrap не вдалися
+            if (successfulConnections === 0) {
+                debugLogger('WARN: No bootstrap nodes connected, attempting DHT discovery');
+                const dhtAddrs = await discoverNodesFromDHT();
+                if (dhtAddrs.length > 0) {
+                    const dhtDialPromises = dhtAddrs.map(async (addr) => {
+                        try {
+                            const ma = multiaddr(addr);
+                            debugLogger('INFO: Attempting to dial DHT node: %s', addr);
+                            await node.dial(ma, { timeout: 3000 });
+                            debugLogger('INFO: Successfully dialed DHT node: %s', addr);
+                            successfulConnections++;
+                        } catch (err) {
+                            debugLogger('ERROR: Failed to dial DHT node %s: %o', addr, err);
+                        }
+                    });
+                    await Promise.all(dhtDialPromises);
+                }
+            }
+
+            if (successfulConnections === 0) {
+                debugLogger("WARN: No connections established, enabling HTTP polling");
+                updateP2PStatus('No network connection, using HTTP polling', true);
+                startPolling();
+            } else {
+                debugLogger('INFO: Connected to %d node(s)', successfulConnections);
+                updateP2PStatus(`Connected to ${successfulConnections} node(s)`);
+            }
+
+            // Запуск періодичного перепідключення
+            startRepublishing();
+
+            // Фонові операції
+            setTimeout(() => {
+                // Періодична публікація адреси
+                setInterval(publishNodeAddress, 2 * 60 * 1000);
+                // Періодичне виявлення вузлів
+                setInterval(async () => {
+                    const newAddrs = await discoverNodesFromDHT();
+                    for (const addr of newAddrs) {
+                        try {
+                            const ma = multiaddr(addr);
+                            debugLogger('INFO: Attempting to dial discovered node: %s', addr);
+                            await node.dial(ma, { timeout: 3000 });
+                            debugLogger('INFO: Successfully dialed discovered node: %s', addr);
+                        } catch (err) {
+                            debugLogger('ERROR: Failed to dial discovered node %s: %o', addr, err);
+                        }
+                    }
+                }, 5 * 60 * 1000);
+                // Завантаження некритичних файлів
+                loadNonCriticalFiles();
+            }, 1000);
+
+            debugLogger("INFO: Node initialization completed");
+            updateP2PStatus('Ready');
+            return node;
+        } catch (error) {
+            debugLogger(`ERROR: Node initialization failed: %o`, error);
+            nodeInitializationStatus = 'failed';
+            updateP2PStatus(`Failed to start: ${error.message}`, true);
+            node = null;
+            startPolling();
+            throw error;
+        }
+    })();
+    return startNodePromise;
 }
 
 /**
