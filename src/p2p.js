@@ -425,102 +425,129 @@ async function startNodeInternal() {
     }
 
     debugLogger("INFO: Fetching bootstrap addresses...");
-    const bootstrapMultiaddrs = await fetchBootstrapAddress();
-    debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
+const bootstrapMultiaddrs = await fetchBootstrapAddress();
+debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
 
-    node = await createLibp2p({
+// Функція фільтрації для WebSocket-адрес
+const wsFilter = (multiaddr) => {
+    let addrStr = multiaddr.toString();
+    debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
+
+    // Замінюємо ws:// на wss:// у продакшені
+    if (!isLocalhost && addrStr.includes('ws://')) {
+        addrStr = addrStr.replace('ws://', 'wss://');
+        debugLogger('INFO: Replaced ws:// with wss://: %s', addrStr);
+    }
+
+    // Додаємо /ws, якщо відсутнє
+    if (addrStr.includes('/wss') && !addrStr.includes('/ws/')) {
+        addrStr = addrStr.replace('/wss', '/wss/ws');
+        debugLogger('INFO: Added /ws to WebSocket multiaddr: %s', addrStr);
+    }
+
+    // Видаляємо подвійні слеші
+    if (addrStr.includes('wss//')) {
+        addrStr = addrStr.replace('wss//', 'wss/');
+        debugLogger('INFO: Fixed wss// to wss/: %s', addrStr);
+    }
+
+    debugLogger('INFO: Final WebSocket multiaddr: %s', addrStr);
+    return multiaddr(addrStr); // Повертаємо об'єкт multiaddr
+};
+
+node = await createLibp2p({
+    addresses: {
+        listen: []
+    },
+    transports: [
+        webSockets({
+            filter: wsFilter
+        })
+    ],
+    connectionEncryption: [noise()],
+    streamMuxers: [mplex()],
+    peerDiscovery: [
+        bootstrap({
+            list: bootstrapMultiaddrs,
+            timeout: 1000,
+            tagName: 'bootstrap',
+            tagValue: 50,
+            tagTTL: 120000
+        })
+    ],
+    services: {
+        identify: identify(),
+        dht: kadDHT({
+            protocolPrefix: '/p2p-redirect',
+            maxInboundStreams: 1000,
+            maxOutboundStreams: 1000,
+            clientMode: true
+        }),
+        pubsub: gossipsub({
+            allowPublishToZeroTopicPeers: true,
+            globalSignaturePolicy: 'StrictSign'
+        }),
+        ping: ping()
+    }
+});
+window.node = node; // Для дебагу в консолі
+
+nodeInitializationStatus = 'starting';
+updateP2PStatus('Starting...');
+
+try {
+    // Спочатку отримуємо bootstrap-адреси
+    debugLogger("INFO: Fetching bootstrap addresses...");
+    const bootstrapMultiaddrs = await fetchBootstrapAddress();
+    debugLogger("INFO: Bootstrap addresses: %o", bootstrapMultiaddrs);
+
+    // Легка конфігурація Libp2p з отриманими адресами
+    const config = {
         addresses: {
-            listen: []
+            listen: [] // Вимкнено слухання вхідних з'єднань
         },
         transports: [
             webSockets({
-                filter: filters.dnsWss
-            })
+                filter: wsFilter
+            }),
+            webRTC({
+                rtcConfiguration: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                }
+            }),
+            circuitRelayTransport()
         ],
-        connectionEncryption: [noise()],
         streamMuxers: [mplex()],
+        connectionEncryption: [noise()],
         peerDiscovery: [
             bootstrap({
                 list: bootstrapMultiaddrs,
-                timeout: 1000,
-                tagName: 'bootstrap',
-                tagValue: 50,
-                tagTTL: 120000
+                interval: 10000,
+                enabled: true
             })
         ],
         services: {
-            identify: identify(),
             dht: kadDHT({
-                protocolPrefix: '/p2p-redirect',
-                maxInboundStreams: 1000,
-                maxOutboundStreams: 1000,
-                clientMode: true
+                clientMode: true,
+                protocol: '/p2p-redirect/kad/1.0.0',
+                enabled: isCryptoAvailable
             }),
             pubsub: gossipsub({
-                allowPublishToZeroTopicPeers: true,
-                globalSignaturePolicy: 'StrictSign'
+                allowPublishToZeroPeers: true,
+                emitSelf: true
             }),
+            identify: identify(),
             ping: ping()
+        },
+        connectionManager: {
+            minConnections: 0,
+            maxConnections: 20
         }
-    });
-    window.node = node; // Для дебагу в консолі
-
-    nodeInitializationStatus = 'starting';
-    updateP2PStatus('Starting...');
-
-    try {
-        // Спочатку отримуємо bootstrap-адреси
-        debugLogger("INFO: Fetching bootstrap addresses...");
-        const bootstrapMultiaddrs = await fetchBootstrapAddress();
-        debugLogger("INFO: Bootstrap addresses: %o", bootstrapMultiaddrs);
-
-        // Легка конфігурація Libp2p з отриманими адресами
-        const config = {
-            addresses: {
-                listen: [] // Вимкнено слухання вхідних з'єднань
-            },
-            transports: [
-                webSockets({
-                    filter: filters.dnsWss
-                }),
-                webRTC({
-                    rtcConfiguration: {
-                        iceServers: [
-                            { urls: 'stun:stun.l.google.com:19302' },
-                            { urls: 'stun:stun1.l.google.com:19302' }
-                        ]
-                    }
-                }),
-                circuitRelayTransport()
-            ],
-            streamMuxers: [mplex()],
-            connectionEncryption: [noise()],
-            peerDiscovery: [
-                bootstrap({
-                    list: bootstrapMultiaddrs,
-                    interval: 10000,
-                    enabled: true
-                })
-            ],
-            services: {
-                dht: kadDHT({
-                    clientMode: true,
-                    protocol: '/p2p-redirect/kad/1.0.0',
-                    enabled: isCryptoAvailable
-                }),
-                pubsub: gossipsub({
-                    allowPublishToZeroPeers: true,
-                    emitSelf: true
-                }),
-                identify: identify(),
-                ping: ping()
-            },
-            connectionManager: {
-                minConnections: 0,
-                maxConnections: 20
-            }
-        };
-        debugLogger("INFO: Libp2p config: %o", config);
+    };
+    debugLogger("INFO: Libp2p config: %o", config);
 
         // Створення вузла
         node = await createLibp2p(config);
