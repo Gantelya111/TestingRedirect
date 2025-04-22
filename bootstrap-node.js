@@ -22,7 +22,6 @@ const debugLogger = logger('bootstrap-node');
 
 // Резервні адреси bootstrap-вузлів
 const BOOTSTRAP_MULTIADDRS = [
-  '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWQ3e6x9p3R9oCt3oU2KMoS9jWq6y4nFL2qUuhj8q3k3gS',
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH'
 ];
@@ -153,24 +152,22 @@ async function startBootstrapNode() {
     const multiaddrs = node.getMultiaddrs().map(ma => ma.toString());
     debugLogger('INFO: Listening on: %o', multiaddrs);
 
-    // У продакшені використовуємо публічну адресу з /wss, локально — WebSocket або TCP
-    const isProduction = process.env.NODE_ENV === 'production';
-    if (isProduction) {
-      selectedMultiaddr = `/dns4/libp2p.onrender.com/tcp/443/wss/p2p/${node.peerId.toString()}`;
-      debugLogger('INFO: Production mode: Using public multiaddr: %s', selectedMultiaddr);
-    } else {
-      selectedMultiaddr = multiaddrs.find(addr => addr.includes('/ws')) || multiaddrs.find(addr => addr.includes('/tcp/')) || multiaddrs[0];
-      if (selectedMultiaddr && !selectedMultiaddr.includes('/p2p/')) {
-        selectedMultiaddr = `${selectedMultiaddr}/p2p/${node.peerId.toString()}`;
+    // Визначення TCP-порту з multiaddrs
+    let tcpPort = 443; // За замовчуванням для продакшену
+    const wsAddr = multiaddrs.find(addr => addr.includes('/ws'));
+    if (wsAddr) {
+      const match = wsAddr.match(/\/tcp\/(\d+)/);
+      if (match) {
+        tcpPort = match[1];
       }
-      debugLogger('INFO: Local mode: Selected multiaddr: %s', selectedMultiaddr);
     }
+    debugLogger('INFO: Determined TCP port: %s', tcpPort);
 
-    if (!selectedMultiaddr) {
-      debugLogger('WARN: No valid multiaddr found, falling back to default');
-      selectedMultiaddr = BOOTSTRAP_MULTIADDRS[0];
-    }
-    debugLogger('INFO: Final selected multiaddr: %s', selectedMultiaddr);
+    // Формування selectedMultiaddr
+    const isProduction = process.env.NODE_ENV === 'production';
+    const domain = isProduction ? 'libp2p.onrender.com' : 'localhost';
+    selectedMultiaddr = `/dns4/${domain}/tcp/${tcpPort}/wss/ws/p2p/${node.peerId.toString()}`;
+    debugLogger('INFO: Selected multiaddr: %s', selectedMultiaddr);
 
     // Підписка на PubSub для синхронізації редиректів
     if (node.services.pubsub) {
@@ -254,13 +251,8 @@ app.get('/health', (req, res) => {
 // Ендпоінт для bootstrap-адреси
 app.get('/bootstrap-address', (req, res) => {
   if (node && node.status === 'started' && selectedMultiaddr) {
-    // У продакшені явно вказуємо wss://
-    const isProduction = process.env.NODE_ENV === 'production';
-    const finalMultiaddr = isProduction
-      ? `/dns4/libp2p.onrender.com/tcp/443/wss/ws/p2p/${node.peerId.toString()}`
-      : selectedMultiaddr;
-    debugLogger('INFO: Serving bootstrap address: %s', finalMultiaddr);
-    res.json({ multiaddr: finalMultiaddr });
+    debugLogger('INFO: Serving bootstrap address: %s', selectedMultiaddr);
+    res.json({ multiaddr: selectedMultiaddr });
   } else {
     debugLogger('ERROR: Bootstrap node not started or multiaddr not set');
     res.status(500).json({ error: 'Bootstrap node not started' });
