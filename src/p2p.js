@@ -1,6 +1,5 @@
 import { createLibp2p } from 'libp2p';
 import { webSockets } from '@libp2p/websockets';
-import { webRTC } from '@libp2p/webrtc';
 import { mplex } from '@libp2p/mplex';
 import { noise } from '@chainsafe/libp2p-noise';
 import { kadDHT } from '@libp2p/kad-dht';
@@ -328,19 +327,6 @@ async function publishStaticFiles() {
         }
     }, 5 * 60 * 1000);
 }
-
-/**
- * Отримання адреси bootstrap-вузла
- * @returns {Promise<string[]>}
- */
-/**
- * Отримання адреси bootstrap-вузла
- * @returns {Promise<string[]>}
- */
-/**
- * Отримання адреси bootstrap-вузла
- * @returns {Promise<string[]>}
- */
 /**
  * Отримання адреси bootstrap-вузла
  * @returns {Promise<string[]>}
@@ -427,6 +413,10 @@ function updateP2PStatus(status, isError = false) {
  * Ініціалізація та запуск Libp2p-вузла
  * @returns {Promise<Object>} - Повертає створений вузол
  */
+/**
+ * Ініціалізація та запуск Libp2p-вузла
+ * @returns {Promise<Object>} - Повертає створений вузол
+ */
 async function startNodeInternal() {
     debugLogger("INFO: Starting node initialization");
     if (node && node.status === 'started') {
@@ -447,17 +437,22 @@ async function startNodeInternal() {
         const bootstrapMultiaddrs = await fetchBootstrapAddress();
         debugLogger('INFO: Bootstrap addresses before Libp2p: %o', bootstrapMultiaddrs);
 
+        const star = webRTCStar({
+            wrtc: typeof window !== 'undefined' ? window : undefined // Для браузера
+        });
+
         node = await createLibp2p({
             addresses: {
-                listen: []
+                listen: ['/webrtc']
             },
             transports: [
-                webRTCStar(), // Використовуємо WebRTC-Star
+                star.transport,
                 circuitRelayTransport()
             ],
             connectionEncryption: [noise()],
             streamMuxers: [mplex()],
             peerDiscovery: [
+                star.discovery,
                 bootstrap({
                     list: bootstrapMultiaddrs,
                     timeout: 5000,
