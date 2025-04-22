@@ -8,7 +8,6 @@ import { gossipsub } from '@chainsafe/libp2p-gossipsub';
 import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
 import { bootstrap } from '@libp2p/bootstrap';
-import { mdns } from '@libp2p/mdns';
 import { circuitRelayTransport } from '@libp2p/circuit-relay-v2';
 import { fromString as uint8ArrayFromString, toString as uint8ArrayToString } from 'uint8arrays';
 import { multiaddr } from '@multiformats/multiaddr';
@@ -508,10 +507,6 @@ async function startNodeInternal() {
                     list: initialBootstrapMultiaddrs,
                     interval: 10000,
                     enabled: true
-                }),
-                mdns({
-                    interval: 10000,
-                    enabled: isLocalhost
                 })
             ],
             services: {
