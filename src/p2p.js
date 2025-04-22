@@ -340,10 +340,39 @@ async function publishStaticFiles() {
  * Отримання адреси bootstrap-вузла
  * @returns {Promise<string[]>}
  */
+/**
+ * Отримання адреси bootstrap-вузла
+ * @returns {Promise<string[]>}
+ */
 async function fetchBootstrapAddress() {
-    const bootstrapAddress = '/dns4/libp2p.onrender.com/tcp/443/p2p/12D3KooWR3KXKFteSUA8HRmi9zxQV47GM5ypkduUHxkHwEySoLau';
-    debugLogger('INFO: Using WebRTC-compatible bootstrap address: %s', bootstrapAddress);
-    return [bootstrapAddress];
+    const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const bootstrapUrl = isLocalhost
+        ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
+        : 'https://libp2p.onrender.com/bootstrap-address';
+    
+    const defaultBootstrapAddresses = [
+        '/dns4/libp2p.onrender.com/tcp/443/p2p/12D3KooWR3KXKFteSUA8HRmi9zxQV47GM5ypkduUHxkHwEySoLau',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmZa1sAx2BNrV2uZq3f2R8s7vxe4r2dKNxu3SowtuZKyvZ',
+        '/dns4/bootstrap-0.mainnet.libp2p.io/tcp/443/p2p/12D3KooWFr29voM9f9eC39ZmkP6YAKW3D3DGQ8qZ3rd4yYHsj3gW'
+    ];
+
+    try {
+        debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
+        const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const data = await response.json();
+        if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
+            debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
+            return [data.multiaddr, ...defaultBootstrapAddresses];
+        }
+        throw new Error('Invalid bootstrap address');
+    } catch (err) {
+        debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
+        debugLogger('INFO: Falling back to default bootstrap addresses: %o', defaultBootstrapAddresses);
+        return defaultBootstrapAddresses;
+    }
 }
 
 /**
@@ -410,6 +439,10 @@ function updateP2PStatus(status, isError = false) {
  * Ініціалізація та запуск Libp2p-вузла
  * @returns {Promise<Object>} - Повертає створений вузол
  */
+/**
+ * Ініціалізація та запуск Libp2p-вузла
+ * @returns {Promise<Object>} - Повертає створений вузол
+ */
 async function startNodeInternal() {
     debugLogger("INFO: Starting node initialization");
     if (node && node.status === 'started') {
@@ -440,7 +473,8 @@ async function startNodeInternal() {
                         iceServers: [
                             { urls: 'stun:stun.l.google.com:19302' },
                             { urls: 'stun:stun1.l.google.com:19302' },
-                            { urls: 'stun:stun2.l.google.com:19302' }
+                            { urls: 'stun:stun2.l.google.com:19302' },
+                            { urls: 'stun:stun3.l.google.com:19302' }
                         ]
                     }
                 }),
@@ -451,10 +485,10 @@ async function startNodeInternal() {
             peerDiscovery: [
                 bootstrap({
                     list: bootstrapMultiaddrs,
-                    timeout: 1000,
+                    timeout: 5000, // Збільшуємо таймаут
                     tagName: 'bootstrap',
                     tagValue: 50,
-                    tagTTL: 120000
+                    tagTTL: 300000 // Збільшуємо TTL
                 })
             ],
             services: {
@@ -463,17 +497,20 @@ async function startNodeInternal() {
                     protocolPrefix: '/p2p-redirect',
                     maxInboundStreams: 1000,
                     maxOutboundStreams: 1000,
-                    clientMode: true
+                    clientMode: false // Вимикаємо clientMode для повноцінної участі в DHT
                 }),
                 pubsub: gossipsub({
                     allowPublishToZeroTopicPeers: true,
-                    globalSignaturePolicy: 'StrictSign'
+                    globalSignaturePolicy: 'StrictSign',
+                    maxInboundStreams: 1000,
+                    maxOutboundStreams: 1000,
+                    emitSelf: true // Для дебагу
                 }),
                 ping: ping()
             },
             connectionManager: {
-                minConnections: 0,
-                maxConnections: 20
+                minConnections: 1,
+                maxConnections: 100 // Збільшуємо максимум
             }
         });
 
@@ -512,11 +549,13 @@ async function startNodeInternal() {
             const peerId = evt.detail.toString();
             debugLogger('INFO: Connected to peer: %s', peerId);
             updateP2PStatus(`Connected to peer: ${peerId.substring(0, 10)}...`);
+            debugLogger('INFO: Current peers: %o', node.getPeers().map(p => p.toString()));
         });
         node.addEventListener('peer:disconnect', (evt) => {
             const peerId = evt.detail.toString();
             debugLogger('INFO: Disconnected from peer: %s', peerId);
             updateP2PStatus(`Disconnected from peer: ${peerId.substring(0, 10)}...`);
+            debugLogger('INFO: Current peers: %o', node.getPeers().map(p => p.toString()));
         });
 
         await node.start();
@@ -534,7 +573,7 @@ async function startNodeInternal() {
             try {
                 const ma = multiaddr(addr);
                 debugLogger('INFO: Attempting to dial bootstrap node: %s', addr);
-                await node.dial(ma, { timeout: 3000 });
+                await node.dial(ma, { timeout: 10000 }); // Збільшуємо таймаут
                 debugLogger('INFO: Successfully dialed bootstrap node: %s', addr);
                 successfulConnections++;
             } catch (err) {
@@ -550,7 +589,10 @@ async function startNodeInternal() {
         if (node.services.pubsub) {
             node.services.pubsub.subscribe(topic);
             debugLogger("INFO: Subscribed to PubSub topic: %s", topic);
-            node.services.pubsub.addEventListener('message', handlePubsubMessage);
+            node.services.pubsub.addEventListener('message', (evt) => {
+                debugLogger('INFO: Received PubSub message for topic %s: %o', evt.detail.topic, evt.detail.data);
+                handlePubsubMessage(evt);
+            });
             updateP2PStatus('PubSub subscribed');
         } else {
             debugLogger('ERROR: PubSub service is not available, falling back to HTTP polling');
@@ -568,7 +610,7 @@ async function startNodeInternal() {
                     try {
                         const ma = multiaddr(addr);
                         debugLogger('INFO: Attempting to dial DHT node: %s', addr);
-                        await node.dial(ma, { timeout: 3000 });
+                        await node.dial(ma, { timeout: 10000 });
                         debugLogger('INFO: Successfully dialed DHT node: %s', addr);
                         successfulConnections++;
                     } catch (err) {
@@ -594,17 +636,18 @@ async function startNodeInternal() {
             setInterval(publishNodeAddress, 2 * 60 * 1000);
             setInterval(async () => {
                 const newAddrs = await discoverNodesFromDHT();
+                debugLogger('INFO: Discovered %d new DHT addresses: %o', newAddrs.length, newAddrs);
                 for (const addr of newAddrs) {
                     try {
                         const ma = multiaddr(addr);
                         debugLogger('INFO: Attempting to dial discovered node: %s', addr);
-                        await node.dial(ma, { timeout: 3000 });
+                        await node.dial(ma, { timeout: 10000 });
                         debugLogger('INFO: Successfully dialed discovered node: %s', addr);
                     } catch (err) {
                         debugLogger('ERROR: Failed to dial discovered node %s: %o', addr, err);
                     }
                 }
-            }, 5 * 60 * 1000);
+            }, 3 * 60 * 1000); // Зменшуємо інтервал до 3 хвилин
             loadNonCriticalFiles();
         }, 1000);
 
