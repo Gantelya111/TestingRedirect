@@ -13,6 +13,7 @@ import { fromString as uint8ArrayFromString, toString as uint8ArrayToString } fr
 import { multiaddr } from '@multiformats/multiaddr';
 import { logger } from '@libp2p/logger';
 import { createHash } from 'crypto';
+import { webRTCStar } from '@libp2p/webrtc-star';
 
 // Локальний логер
 const debugLogger = logger('p2p-app');
@@ -345,34 +346,13 @@ async function publishStaticFiles() {
  * @returns {Promise<string[]>}
  */
 async function fetchBootstrapAddress() {
-    const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-    const bootstrapUrl = isLocalhost
-        ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
-        : 'https://libp2p.onrender.com/bootstrap-address';
-    
-    const defaultBootstrapAddresses = [
-        '/dns4/libp2p.onrender.com/tcp/443/p2p/12D3KooWR3KXKFteSUA8HRmi9zxQV47GM5ypkduUHxkHwEySoLau',
-        '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-        '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH',
-        '/dnsaddr/bootstrap.libp2p.io/p2p/QmZa1sAx2BNrV2uZq3f2R8s7vxe4r2dKNxu3SowtuZKyvZ',
-        '/dns4/bootstrap-0.mainnet.libp2p.io/tcp/443/p2p/12D3KooWFr29voM9f9eC39ZmkP6YAKW3D3DGQ8qZ3rd4yYHsj3gW'
+    const signalingServers = [
+        '/dns4/wrtc-star1.par.dwebops.pub/tcp/443/wss/p2p-webrtc-star',
+        '/dns4/wrtc-star2.sjc.dwebops.pub/tcp/443/wss/p2p-webrtc-star',
+        '/dns4/star-signal.cloud.ipfs.team/tcp/443/wss/p2p-webrtc-star'
     ];
-
-    try {
-        debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
-        const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
-        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-        const data = await response.json();
-        if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-            debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
-            return [data.multiaddr, ...defaultBootstrapAddresses];
-        }
-        throw new Error('Invalid bootstrap address');
-    } catch (err) {
-        debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
-        debugLogger('INFO: Falling back to default bootstrap addresses: %o', defaultBootstrapAddresses);
-        return defaultBootstrapAddresses;
-    }
+    debugLogger('INFO: Using WebRTC-Star signaling servers: %o', signalingServers);
+    return signalingServers;
 }
 
 /**
@@ -443,6 +423,10 @@ function updateP2PStatus(status, isError = false) {
  * Ініціалізація та запуск Libp2p-вузла
  * @returns {Promise<Object>} - Повертає створений вузол
  */
+/**
+ * Ініціалізація та запуск Libp2p-вузла
+ * @returns {Promise<Object>} - Повертає створений вузол
+ */
 async function startNodeInternal() {
     debugLogger("INFO: Starting node initialization");
     if (node && node.status === 'started') {
@@ -468,16 +452,7 @@ async function startNodeInternal() {
                 listen: []
             },
             transports: [
-                webRTC({
-                    rtcConfiguration: {
-                        iceServers: [
-                            { urls: 'stun:stun.l.google.com:19302' },
-                            { urls: 'stun:stun1.l.google.com:19302' },
-                            { urls: 'stun:stun2.l.google.com:19302' },
-                            { urls: 'stun:stun3.l.google.com:19302' }
-                        ]
-                    }
-                }),
+                webRTCStar(), // Використовуємо WebRTC-Star
                 circuitRelayTransport()
             ],
             connectionEncryption: [noise()],
@@ -485,10 +460,10 @@ async function startNodeInternal() {
             peerDiscovery: [
                 bootstrap({
                     list: bootstrapMultiaddrs,
-                    timeout: 5000, // Збільшуємо таймаут
+                    timeout: 5000,
                     tagName: 'bootstrap',
                     tagValue: 50,
-                    tagTTL: 300000 // Збільшуємо TTL
+                    tagTTL: 300000
                 })
             ],
             services: {
@@ -497,20 +472,18 @@ async function startNodeInternal() {
                     protocolPrefix: '/p2p-redirect',
                     maxInboundStreams: 1000,
                     maxOutboundStreams: 1000,
-                    clientMode: false // Вимикаємо clientMode для повноцінної участі в DHT
+                    clientMode: false
                 }),
                 pubsub: gossipsub({
                     allowPublishToZeroTopicPeers: true,
                     globalSignaturePolicy: 'StrictSign',
-                    maxInboundStreams: 1000,
-                    maxOutboundStreams: 1000,
-                    emitSelf: true // Для дебагу
+                    emitSelf: true
                 }),
                 ping: ping()
             },
             connectionManager: {
                 minConnections: 1,
-                maxConnections: 100 // Збільшуємо максимум
+                maxConnections: 100
             }
         });
 
@@ -573,7 +546,7 @@ async function startNodeInternal() {
             try {
                 const ma = multiaddr(addr);
                 debugLogger('INFO: Attempting to dial bootstrap node: %s', addr);
-                await node.dial(ma, { timeout: 10000 }); // Збільшуємо таймаут
+                await node.dial(ma, { timeout: 10000 });
                 debugLogger('INFO: Successfully dialed bootstrap node: %s', addr);
                 successfulConnections++;
             } catch (err) {
@@ -605,6 +578,7 @@ async function startNodeInternal() {
         if (successfulConnections === 0) {
             debugLogger('WARN: No bootstrap nodes connected, attempting DHT discovery');
             const dhtAddrs = await discoverNodesFromDHT();
+            debugLogger('INFO: Discovered %d DHT addresses: %o', dhtAddrs.length, dhtAddrs);
             if (dhtAddrs.length > 0) {
                 const dhtDialPromises = dhtAddrs.map(async (addr) => {
                     try {
@@ -647,7 +621,7 @@ async function startNodeInternal() {
                         debugLogger('ERROR: Failed to dial discovered node %s: %o', addr, err);
                     }
                 }
-            }, 3 * 60 * 1000); // Зменшуємо інтервал до 3 хвилин
+            }, 3 * 60 * 1000);
             loadNonCriticalFiles();
         }, 1000);
 
@@ -663,7 +637,6 @@ async function startNodeInternal() {
         throw error;
     }
 }
-
 /**
  * Запуск HTTP polling як резервного механізму
  */
