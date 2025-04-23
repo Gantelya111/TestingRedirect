@@ -326,7 +326,7 @@ async function publishStaticFiles() {
 async function fetchBootstrapAddress(peerId = null) {
     const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
     const domain = isLocalhost ? 'localhost' : 'libp2p.onrender.com';
-    const port = isLocalhost ? (process.env.PORT || 3000) : 443; // Render використовує 443 для HTTPS
+    const port = isLocalhost ? (process.env.PORT || 3000) : 443;
     const bootstrapUrl = isLocalhost
         ? `http://${domain}:${port}/bootstrap-address`
         : `https://${domain}/bootstrap-address`;
@@ -337,50 +337,24 @@ async function fetchBootstrapAddress(peerId = null) {
         '/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa'
     ];
 
-    // Спроба отримати адресу від сервера
     try {
         debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
         const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
-        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-        const data = await response.json();
-        if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-            let modifiedAddr = data.multiaddr;
-            if (!isLocalhost && !modifiedAddr.includes('/wss')) {
-                modifiedAddr = modifiedAddr.replace('/ws', '/wss');
-            }
-            if (!modifiedAddr.includes('/ws/')) {
-                modifiedAddr = modifiedAddr.replace('/wss/p2p/', '/wss/ws/p2p/');
-            }
-            if (modifiedAddr.includes('wss//')) {
-                modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
-            }
-            debugLogger('INFO: Received and modified bootstrap address: %s', modifiedAddr);
-            return [modifiedAddr, ...fallbackMultiaddrs];
+        if (!response.ok) {
+            throw new Error(`HTTP error: ${response.status}`);
         }
-        throw new Error('Invalid bootstrap address');
+        const data = await response.json();
+        if (data.multiaddr) {
+            debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
+            return [data.multiaddr, ...fallbackMultiaddrs];
+        } else {
+            debugLogger('WARN: No multiaddr in response: %o', data);
+            return fallbackMultiaddrs;
+        }
     } catch (err) {
         debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
+        return fallbackMultiaddrs;
     }
-
-    // Якщо запит не вдався, створюємо власну адресу
-    if (peerId) {
-        // Спробуємо отримати TCP-порт після ініціалізації вузла
-        let tcpPort = 443; // За замовчуванням для Render
-        if (node && node.getMultiaddrs) {
-            const multiaddrs = node.getMultiaddrs();
-            const addrWithPort = multiaddrs.find(addr => addr.toString().includes('/tcp/'));
-            if (addrWithPort) {
-                const match = addrWithPort.toString().match(/\/tcp\/(\d+)/);
-                if (match) tcpPort = match[1];
-            }
-        }
-        const selfAddr = `/dns4/${domain}/tcp/${tcpPort}/wss/ws/p2p/${peerId}`;
-        debugLogger('INFO: Generated self-referential bootstrap address: %s', selfAddr);
-        return [selfAddr, ...fallbackMultiaddrs];
-    }
-
-    debugLogger('INFO: Falling back to public bootstrap nodes');
-    return fallbackMultiaddrs;
 }
 
 /**
@@ -452,10 +426,10 @@ async function startNodeInternal() {
     updateP2PStatus('Initializing node...');
 
     try {
-        // Початкові bootstrap-адреси (без peerId)
+        // Початкові bootstrap-адреси
         debugLogger("INFO: Fetching initial bootstrap addresses...");
-        const initialBootstrapMultiaddrs = await fetchBootstrapAddress();
-        debugLogger('INFO: Initial bootstrap addresses: %o', initialBootstrapMultiaddrs);
+        let bootstrapMultiaddrs = await fetchBootstrapAddress();
+        debugLogger('INFO: Initial bootstrap addresses: %o', bootstrapMultiaddrs);
 
         // Функція фільтрації для WebSocket-адрес
         const wsFilter = (multiaddr) => {
@@ -504,7 +478,7 @@ async function startNodeInternal() {
             connectionEncryption: [noise()],
             peerDiscovery: [
                 bootstrap({
-                    list: initialBootstrapMultiaddrs,
+                    list: bootstrapMultiaddrs,
                     interval: 10000,
                     enabled: true
                 })
@@ -533,15 +507,6 @@ async function startNodeInternal() {
         debugLogger("INFO: Creating Libp2p node...");
         node = await createLibp2p(config);
         debugLogger("INFO: Libp2p node created with ID: %s", node.peerId.toString());
-
-        // Оновлення bootstrap-адрес із peerId
-        debugLogger("INFO: Fetching bootstrap addresses with peerId...");
-        const bootstrapMultiaddrs = await fetchBootstrapAddress(node.peerId.toString());
-        debugLogger('INFO: Updated bootstrap addresses: %o', bootstrapMultiaddrs);
-
-        // Оновлення peerDiscovery з новими адресами
-        node.services.bootstrap.list = bootstrapMultiaddrs;
-        debugLogger('INFO: Updated bootstrap list in node: %o', bootstrapMultiaddrs);
 
         // Додаємо обробник помилок вузла
         node.addEventListener('error', (evt) => {
@@ -611,23 +576,6 @@ async function startNodeInternal() {
         if (multiaddrs.length === 0) {
             debugLogger('WARN: No multiaddrs assigned to node, operating in isolated mode');
             updateP2PStatus('No addresses assigned, isolated mode', true);
-        } else {
-            // Визначення TCP-порту
-            const addrWithPort = multiaddrs.find(addr => addr.includes('/tcp/'));
-            if (addrWithPort) {
-                const match = addrWithPort.match(/\/tcp\/(\d+)/);
-                if (match) {
-                    const tcpPort = match[1];
-                    debugLogger('INFO: Detected TCP port: %s', tcpPort);
-                    // Оновлення bootstrap-адреси з актуальним портом
-                    const selfAddr = `/dns4/libp2p.onrender.com/tcp/${tcpPort}/wss/ws/p2p/${node.peerId}`;
-                    if (!bootstrapMultiaddrs.includes(selfAddr)) {
-                        bootstrapMultiaddrs.unshift(selfAddr);
-                        node.services.bootstrap.list = bootstrapMultiaddrs;
-                        debugLogger('INFO: Added self-referential address to bootstrap list: %s', selfAddr);
-                    }
-                }
-            }
         }
 
         // Паралельне виконання критичних операцій
