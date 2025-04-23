@@ -28,7 +28,7 @@ if (!isHttps && !isLocalhost) {
     debugLogger('WARN: Running on HTTP (not localhost). WebRTC prioritized.');
 }
 
-let node;
+let node = null;
 const redirectsCache = new Map();
 const topic = 'redirects-changes-v4';
 const REPUBLISH_INTERVAL_MS = 10 * 60 * 1000;
@@ -89,7 +89,7 @@ loadRedirectsCache();
  * Публікація адреси вузла в DHT
  */
 async function publishNodeAddress() {
-    if (!node || node.status !== 'started' || !node.services.dht) {
+    if (!node || node.status !== 'started' || !node.services?.dht) {
         debugLogger('WARN: Cannot publish node address: node or DHT not ready');
         return;
     }
@@ -114,7 +114,7 @@ async function publishNodeAddress() {
  * Пошук пірів через DHT
  */
 async function discoverPeers() {
-    if (!node || !node.services.dht) {
+    if (!node || !node.services?.dht) {
         debugLogger('WARN: Cannot discover peers: node or DHT not ready');
         return [];
     }
@@ -201,7 +201,7 @@ function startPolling() {
  * Запит статичного файлу
  */
 async function requestStaticFile(filePath) {
-    if (!node || !node.services.dht) {
+    if (!node || node.status !== 'started' || !node.services?.dht) {
         debugLogger('WARN: Cannot request file: node or DHT not ready');
         return null;
     }
@@ -244,6 +244,11 @@ async function requestStaticFile(filePath) {
  * Завантаження index.html
  */
 async function loadSiteFromP2P() {
+    if (!node || node.status !== 'started') {
+        debugLogger('WARN: Cannot load site: node not ready');
+        updateP2PStatus('Node not ready for site loading', true);
+        return false;
+    }
     const criticalFile = 'index.html';
     if (!localStorage.getItem(`site-file:${criticalFile}`)) {
         const content = await requestStaticFile(criticalFile);
@@ -271,6 +276,10 @@ async function loadSiteFromP2P() {
  * Завантаження некритичних файлів
  */
 async function loadNonCriticalFiles() {
+    if (!node || node.status !== 'started') {
+        debugLogger('WARN: Cannot load non-critical files: node not ready');
+        return;
+    }
     const nonCriticalFiles = ['p2p.js', 'manager.js', 'edit-redirect.js', 'p2p-app.js', 'polyfills.js'];
     for (const file of nonCriticalFiles) {
         if (!localStorage.getItem(`site-file:${file}`)) {
@@ -284,7 +293,7 @@ async function loadNonCriticalFiles() {
  * Публікація статичних файлів
  */
 async function publishStaticFiles() {
-    if (!node || !node.services.dht) {
+    if (!node || !node.services?.dht) {
         debugLogger('WARN: Cannot publish files: node or DHT not ready');
         return;
     }
@@ -312,6 +321,7 @@ async function publishStaticFiles() {
         }
     }
     setInterval(async () => {
+        if (!node || !node.services?.dht) return;
         for (const file of staticFiles) {
             const content = localStorage.getItem(`site-file:${file.path}`);
             if (content) {
@@ -357,6 +367,8 @@ async function startNodeInternal() {
 
     try {
         const bootstrapMultiaddrs = await fetchBootstrapAddress();
+        debugLogger('INFO: Bootstrap addresses: %o', bootstrapMultiaddrs);
+
         const config = {
             transports: [
                 webRTC({
@@ -365,8 +377,7 @@ async function startNodeInternal() {
                             { urls: 'stun:stun.l.google.com:19302' },
                             { urls: 'stun:stun1.l.google.com:19302' },
                             { urls: 'stun:stun2.l.google.com:19302' },
-                            { urls: 'stun:stun3.l.google.com:19302' },
-                            { urls: 'turn:global.turn.twilio.com:3478?transport=udp', credential: 'optional', username: 'optional' }
+                            { urls: 'stun:stun3.l.google.com:19302' }
                         ]
                     }
                 }),
@@ -429,32 +440,31 @@ async function startNodeInternal() {
             debugLogger('INFO: Connected to %s', peerId);
             updateP2PStatus(`Connected: ${peerId.substring(0, 10)}...`);
             for (const [shortCode, redirect] of redirectsCache) {
-                const message = { action: 'create', shortCode, redirect: {
-                    destinationUrl: redirect.destinationUrl,
-                    description: redirect.description,
-                    createdAt: redirect.createdAt
-                }};
-                node.services.pubsub.publish(
-                    topic,
-                    uint8ArrayFromString(JSON.stringify(message))
-                ).catch(err => debugLogger('ERROR: Failed to publish redirect: %o', err));
+                const message = {
+                    action: 'create',
+                    shortCode,
+                    redirect: {
+                        destinationUrl: redirect.destinationUrl,
+                        description: redirect.description,
+                        createdAt: redirect.createdAt
+                    }
+                };
+                if (node?.services?.pubsub) {
+                    node.services.pubsub.publish(
+                        topic,
+                        uint8ArrayFromString(JSON.stringify(message))
+                    ).catch(err => debugLogger('ERROR: Failed to publish redirect: %o', err));
+                }
             }
         });
 
         await node.start();
         nodeStatus = 'started';
         debugLogger('INFO: Node started, ID: %s', node.peerId.toString());
+        debugLogger('INFO: Node multiaddrs: %o', node.getMultiaddrs().map(ma => ma.toString()));
+        debugLogger('INFO: PubSub topics: %o', node.services?.pubsub?.getTopics() || []);
 
-        const criticalPromises = [
-            publishNodeAddress(),
-            loadSiteFromP2P(),
-            publishStaticFiles(),
-            node.services.pubsub.subscribe(topic).then(() => {
-                debugLogger('INFO: Subscribed to %s', topic);
-                node.services.pubsub.addEventListener('message', handlePubsubMessage);
-            })
-        ];
-
+        // Підключення до bootstrap-вузлів
         let successfulConnections = 0;
         for (const addr of bootstrapMultiaddrs) {
             try {
@@ -466,6 +476,7 @@ async function startNodeInternal() {
             }
         }
 
+        // Підключення до пірів із DHT
         const dhtAddrs = await discoverPeers();
         for (const addr of dhtAddrs) {
             try {
@@ -477,15 +488,44 @@ async function startNodeInternal() {
             }
         }
 
+        // Ініціалізація PubSub
+        if (node.services?.pubsub) {
+            try {
+                await node.services.pubsub.subscribe(topic);
+                debugLogger('INFO: Subscribed to PubSub topic: %s', topic);
+                node.services.pubsub.addEventListener('message', handlePubsubMessage);
+            } catch (err) {
+                debugLogger('ERROR: Failed to subscribe to PubSub: %o', err);
+                updateP2PStatus('PubSub subscription failed', true);
+                startPolling();
+            }
+        } else {
+            debugLogger('WARN: PubSub service not available');
+            updateP2PStatus('PubSub unavailable, using polling', true);
+            startPolling();
+        }
+
+        // Виконання критичних операцій після ініціалізації
+        const criticalPromises = [
+            publishNodeAddress(),
+            loadSiteFromP2P(),
+            publishStaticFiles()
+        ];
+
+        await Promise.all(criticalPromises);
+
         if (successfulConnections === 0) {
-            debugLogger('WARN: No connections, enabling polling');
+            debugLogger('WARN: No connections established, enabling polling');
+            updateP2PStatus('No network connection, using polling', true);
             startPolling();
         } else {
             debugLogger('INFO: Connected to %d peers', successfulConnections);
             updateP2PStatus(`Connected to ${successfulConnections} peers`);
         }
 
+        // Періодичне оновлення пірів
         setInterval(async () => {
+            if (!node || node.status !== 'started') return;
             await publishNodeAddress();
             const newAddrs = await discoverPeers();
             for (const addr of newAddrs) {
@@ -498,14 +538,15 @@ async function startNodeInternal() {
             }
         }, 3 * 60 * 1000);
 
-        await Promise.all(criticalPromises);
-        loadNonCriticalFiles();
+        // Фонове завантаження некритичних файлів
+        setTimeout(loadNonCriticalFiles, 1000);
         startRepublishing();
+
         updateP2PStatus(`Ready, peers: ${node.getPeers().length}`);
         return node;
     } catch (err) {
         debugLogger('ERROR: Node initialization failed: %o', err);
-        console.error('Node error:', err.stack);
+        console.error('Node initialization error:', err.stack);
         nodeStatus = 'failed';
         updateP2PStatus(`Failed: ${err.message}`, true);
         startPolling();
@@ -521,9 +562,14 @@ async function stopNode() {
     if (republishIntervalId) clearInterval(republishIntervalId);
     if (pollingIntervalId) clearInterval(pollingIntervalId);
     if (node && node.status === 'started') {
-        await node.stop();
-        debugLogger('INFO: Node stopped');
-        updateP2PStatus('Stopped');
+        try {
+            await node.stop();
+            debugLogger('INFO: Node stopped');
+            updateP2PStatus('Stopped');
+        } catch (err) {
+            debugLogger('ERROR: Failed to stop node: %o', err);
+            updateP2PStatus('Error stopping node', true);
+        }
     }
     node = null;
     nodeStatus = 'idle';
@@ -573,7 +619,10 @@ async function handlePubsubMessage(evt) {
 }
 
 async function republishActiveRedirects() {
-    if (!node || node.status !== 'started' || !node.services.dht) return;
+    if (!node || node.status !== 'started' || !node.services?.dht) {
+        debugLogger('WARN: Cannot republish redirects: node or DHT not ready');
+        return;
+    }
     let successCount = 0;
     for (const [shortCode, redirect] of redirectsCache) {
         if (redirect.destinationUrl && redirect.passwordHash) {
@@ -601,14 +650,15 @@ function startRepublishing() {
 async function createRedirect(url, description = '') {
     debugLogger('INFO: Creating redirect: %s', url);
     if (!url || typeof url !== 'string' || url.length < 5) throw new Error('Invalid URL');
-    await startNodePromise.catch(() => {});
+    await startNodePromise.catch(err => debugLogger('WARN: Node failed to start, proceeding in local mode: %o', err));
+    const isIsolated = !node || !node.services?.dht;
     let shortCode;
     let attempts = 0;
     while (attempts < MAX_SHORTCODE_ATTEMPTS) {
         attempts++;
         shortCode = await generateShortCode(url + Date.now() + Math.random());
         if (redirectsCache.has(shortCode)) continue;
-        if (!node?.services?.dht) break;
+        if (isIsolated) break;
         try {
             await node.services.dht.get(uint8ArrayFromString(`${KEY_PREFIX}${shortCode}`), DHT_GET_OPTIONS);
         } catch (err) {
@@ -626,7 +676,7 @@ async function createRedirect(url, description = '') {
         createdAt: Date.now()
     };
     try {
-        if (node?.services?.dht) {
+        if (!isIsolated) {
             await node.services.dht.put(
                 uint8ArrayFromString(`${KEY_PREFIX}${shortCode}`),
                 uint8ArrayFromString(JSON.stringify(redirect)),
@@ -635,47 +685,59 @@ async function createRedirect(url, description = '') {
         }
         redirectsCache.set(shortCode, redirect);
         saveRedirectsCache();
-        if (node?.services?.pubsub) {
+        if (!isIsolated && node?.services?.pubsub) {
             await node.services.pubsub.publish(
                 topic,
-                uint8ArrayFromString(JSON.stringify({ action: 'create', shortCode, redirect: {
-                    destinationUrl: url,
-                    description,
-                    createdAt: redirect.createdAt
-                }}))
+                uint8ArrayFromString(JSON.stringify({
+                    action: 'create',
+                    shortCode,
+                    redirect: { destinationUrl: url, description, createdAt: redirect.createdAt }
+                }))
             );
         }
+        updateP2PStatus('Redirect created');
         return { shortCode, password };
     } catch (err) {
         debugLogger('ERROR: Failed to create redirect: %o', err);
+        updateP2PStatus('Failed to create redirect', true);
         throw new Error('Failed to create redirect');
     }
 }
 
 async function getRedirect(shortCode) {
     debugLogger('INFO: Getting redirect: %s', shortCode);
-    if (redirectsCache.has(shortCode)) return redirectsCache.get(shortCode);
-    if (!node?.services?.dht) return null;
+    if (!shortCode) return null;
+    if (redirectsCache.has(shortCode)) {
+        debugLogger('INFO: Found in cache: %s', shortCode);
+        return redirectsCache.get(shortCode);
+    }
+    if (!node || !node.services?.dht) {
+        debugLogger('WARN: Node or DHT not ready for %s', shortCode);
+        return null;
+    }
     try {
         const recordBytes = await node.services.dht.get(uint8ArrayFromString(`${KEY_PREFIX}${shortCode}`), DHT_GET_OPTIONS);
         const redirect = JSON.parse(uint8ArrayToString(recordBytes));
         if (redirect && redirect.destinationUrl) {
             redirectsCache.set(shortCode, redirect);
             saveRedirectsCache();
+            debugLogger('INFO: Found in DHT: %s', shortCode);
             return redirect;
         }
         return null;
     } catch (err) {
-        debugLogger('ERROR: Failed to get redirect: %o', err);
+        debugLogger('ERROR: Failed to get redirect %s: %o', shortCode, err);
         return null;
     }
 }
 
 async function updateRedirect(shortCode, newUrl, newDescription, password) {
     debugLogger('INFO: Updating redirect: %s', shortCode);
+    if (!newUrl || typeof newUrl !== 'string' || newUrl.length < 5) throw new Error('Invalid URL');
     const stored = await getRedirect(shortCode);
     if (!stored) throw new Error('Redirect not found');
     if (!(await verifyRedirectPassword(password, stored.passwordHash))) throw new Error('Incorrect password');
+    const isIsolated = !node || !node.services?.dht;
     const updatedRedirect = {
         ...stored,
         destinationUrl: newUrl,
@@ -683,7 +745,7 @@ async function updateRedirect(shortCode, newUrl, newDescription, password) {
         updatedAt: Date.now()
     };
     try {
-        if (node?.services?.dht) {
+        if (!isIsolated) {
             await node.services.dht.put(
                 uint8ArrayFromString(`${KEY_PREFIX}${shortCode}`),
                 uint8ArrayFromString(JSON.stringify(updatedRedirect)),
@@ -692,19 +754,25 @@ async function updateRedirect(shortCode, newUrl, newDescription, password) {
         }
         redirectsCache.set(shortCode, updatedRedirect);
         saveRedirectsCache();
-        if (node?.services?.pubsub) {
+        if (!isIsolated && node?.services?.pubsub) {
             await node.services.pubsub.publish(
                 topic,
-                uint8ArrayFromString(JSON.stringify({ action: 'update', shortCode, redirect: {
-                    destinationUrl: newUrl,
-                    description: newDescription,
-                    updatedAt: updatedRedirect.updatedAt
-                }}))
+                uint8ArrayFromString(JSON.stringify({
+                    action: 'update',
+                    shortCode,
+                    redirect: {
+                        destinationUrl: newUrl,
+                        description: newDescription,
+                        updatedAt: updatedRedirect.updatedAt
+                    }
+                }))
             );
         }
+        updateP2PStatus('Redirect updated');
         return { success: true };
     } catch (err) {
         debugLogger('ERROR: Failed to update redirect: %o', err);
+        updateP2PStatus('Failed to update redirect', true);
         throw new Error('Failed to update redirect');
     }
 }
@@ -714,23 +782,27 @@ async function deleteRedirect(shortCode, password) {
     const stored = await getRedirect(shortCode);
     if (!stored) return { success: true, message: 'Redirect not found' };
     if (!(await verifyRedirectPassword(password, stored.passwordHash))) throw new Error('Incorrect password');
+    const isIsolated = !node || !node.services?.dht;
     try {
         redirectsCache.delete(shortCode);
         saveRedirectsCache();
-        if (node?.services?.pubsub) {
+        if (!isIsolated && node?.services?.pubsub) {
             await node.services.pubsub.publish(
                 topic,
                 uint8ArrayFromString(JSON.stringify({ action: 'delete', shortCode }))
             );
         }
+        updateP2PStatus('Redirect deleted');
         return { success: true };
     } catch (err) {
         debugLogger('ERROR: Failed to delete redirect: %o', err);
+        updateP2PStatus('Failed to delete redirect', true);
         throw new Error('Failed to delete redirect');
     }
 }
 
 function getLocalRedirects(searchQuery = '') {
+    debugLogger('INFO: Getting local redirects with query: %s', searchQuery);
     const query = searchQuery.toLowerCase().trim();
     const redirects = Array.from(redirectsCache.values());
     if (!query) return redirects;
@@ -756,12 +828,19 @@ function generateSalt(length = 16) {
 
 async function hashPassword(password, salt = null) {
     const currentSalt = salt || generateSalt();
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password + currentSalt);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    return `${currentSalt}:${hashHex}`;
+    if (isCryptoAvailable) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(password + currentSalt);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        return `${currentSalt}:${hashHex}`;
+    } else {
+        const hash = createHash('sha256');
+        hash.update(password + currentSalt);
+        const hashHex = hash.digest('hex');
+        return `${currentSalt}:${hashHex}`;
+    }
 }
 
 async function verifyRedirectPassword(password, storedSaltAndHash) {
@@ -772,12 +851,19 @@ async function verifyRedirectPassword(password, storedSaltAndHash) {
 }
 
 async function generateShortCode(input) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(input);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    return hashHex.slice(0, 10);
+    if (isCryptoAvailable) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(input);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        return hashHex.slice(0, 10);
+    } else {
+        const hash = createHash('sha256');
+        hash.update(input);
+        const hashHex = hash.digest('hex');
+        return hashHex.slice(0, 10);
+    }
 }
 
 window.debugNodeStatus = () => {
