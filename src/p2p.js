@@ -347,8 +347,18 @@ async function fetchBootstrapAddress(peerId = null) {
         const data = await response.json();
         debugLogger('DEBUG: Bootstrap fetch response data: %o', data);
         if (data.multiaddr) {
-            debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
-            const addresses = [data.multiaddr, ...fallbackMultiaddrs];
+            // Примусова заміна ws:// на wss:// і додавання /ws
+            let multiaddr = data.multiaddr;
+            if (multiaddr.includes('ws://')) {
+                multiaddr = multiaddr.replace('ws://', 'wss://');
+                debugLogger('DEBUG: Forced ws:// to wss://: %s', multiaddr);
+            }
+            if (multiaddr.includes('/wss') && !multiaddr.includes('/ws/')) {
+                multiaddr = multiaddr.replace('/wss', '/wss/ws');
+                debugLogger('DEBUG: Added /ws to bootstrap multiaddr: %s', multiaddr);
+            }
+            debugLogger('INFO: Received bootstrap address: %s', multiaddr);
+            const addresses = [multiaddr, ...fallbackMultiaddrs];
             debugLogger('DEBUG: Final bootstrap addresses: %o', addresses);
             return addresses;
         } else {
@@ -474,7 +484,9 @@ async function startNodeInternal() {
                     rtcConfiguration: {
                         iceServers: [
                             { urls: 'stun:stun.l.google.com:19302' },
-                            { urls: 'stun:stun1.l.google.com:19302' }
+                            { urls: 'stun:stun1.l.google.com:19302' },
+                            { urls: 'stun:stun2.l.google.com:19302' },
+                            { urls: 'stun:stun3.l.google.com:19302' }
                         ]
                     }
                 }),
@@ -548,7 +560,10 @@ async function startNodeInternal() {
         });
         node.addEventListener('peer:connect', (evt) => {
             const peerId = evt.detail.toString();
-            debugLogger('INFO: Connected to peer: %s', peerId);
+            const connection = node.getConnections(evt.detail)[0];
+            const transport = connection?.transport || 'unknown';
+            debugLogger('DEBUG: Connected to peer %s via transport: %s', peerId, transport);
+            debugLogger('DEBUG: Current peers after connect: %o', node.getPeers().map(p => p.toString()));
             updateP2PStatus(`Connected to peer: ${peerId.substring(0, 10)}...`);
             for (const [shortCode, redirect] of redirectsCache) {
                 const safeRedirect = {
@@ -578,6 +593,12 @@ async function startNodeInternal() {
         const multiaddrs = node.getMultiaddrs().map(ma => ma.toString());
         debugLogger('INFO: Node addresses: %o', multiaddrs);
         debugLogger('INFO: DHT enabled: %o', !!node.services.dht);
+
+        // Автоматична перевірка WebSocket
+        const ws = new WebSocket(isLocalhost ? 'ws://localhost:3000/ws' : 'wss://libp2p.onrender.com/ws');
+        ws.onopen = () => debugLogger('INFO: WebSocket connection established');
+        ws.onerror = (err) => debugLogger('ERROR: WebSocket connection failed: %o', err);
+        ws.onmessage = (msg) => debugLogger('INFO: WebSocket message: %o', msg.data);
 
         if (multiaddrs.length === 0) {
             debugLogger('WARN: No multiaddrs assigned to node, operating in isolated mode');
@@ -617,6 +638,7 @@ async function startNodeInternal() {
         if (node.services.pubsub) {
             await node.services.pubsub.subscribe(topic);
             debugLogger("INFO: Subscribed to PubSub topic: %s", topic);
+            debugLogger("DEBUG: Current PubSub topics: %o", node.services.pubsub.getTopics());
             node.services.pubsub.addEventListener('message', handlePubsubMessage);
             updateP2PStatus('PubSub subscribed');
         } else {
@@ -684,6 +706,7 @@ async function startNodeInternal() {
         return node;
     } catch (error) {
         debugLogger(`ERROR: Node initialization failed: %o`, error);
+        console.error('Node initialization error:', error.stack);
         nodeInitializationStatus = 'failed';
         updateP2PStatus(`Failed to start: ${error.message}`, true);
         node = null;
@@ -1347,6 +1370,36 @@ async function generateShortCode(inputString) {
         return shortCode;
     }
 }
+
+// Дебаг-функція для перевірки статусу вузла
+window.debugNodeStatus = () => {
+    console.log('Node Status:', {
+        initialized: !!node,
+        status: node?.status || 'not initialized',
+        peerId: node?.peerId?.toString() || 'unknown',
+        peers: node?.getPeers().map(p => p.toString()) || [],
+        multiaddrs: node?.getMultiaddrs().map(ma => ma.toString()) || [],
+        pubsubTopics: node?.services?.pubsub?.getTopics() || [],
+        dhtEnabled: !!node?.services?.dht
+    });
+};
+
+// Дебаг-об'єкт для тестування P2P
+window.testP2P = {
+    getPeers: () => node?.getPeers().map(p => p.toString()) || [],
+    getStatus: () => window.debugNodeStatus(),
+    dialBootstrap: async () => {
+        const addrs = await fetchBootstrapAddress();
+        for (const addr of addrs) {
+            try {
+                await node.dial(multiaddr(addr), { timeout: 5000 });
+                console.log(`Dialed: ${addr}`);
+            } catch (err) {
+                console.error(`Failed to dial ${addr}:`, err);
+            }
+        }
+    }
+};
 
 // Дебаг експорту
 console.log('DEBUG: Exporting from p2p.js:', {
