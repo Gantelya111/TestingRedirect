@@ -340,19 +340,25 @@ async function fetchBootstrapAddress(peerId = null) {
     try {
         debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
         const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
+        debugLogger('DEBUG: Bootstrap fetch response status: %d', response.status);
         if (!response.ok) {
             throw new Error(`HTTP error: ${response.status}`);
         }
         const data = await response.json();
+        debugLogger('DEBUG: Bootstrap fetch response data: %o', data);
         if (data.multiaddr) {
             debugLogger('INFO: Received bootstrap address: %s', data.multiaddr);
-            return [data.multiaddr, ...fallbackMultiaddrs];
+            const addresses = [data.multiaddr, ...fallbackMultiaddrs];
+            debugLogger('DEBUG: Final bootstrap addresses: %o', addresses);
+            return addresses;
         } else {
             debugLogger('WARN: No multiaddr in response: %o', data);
+            debugLogger('DEBUG: Falling back to default addresses: %o', fallbackMultiaddrs);
             return fallbackMultiaddrs;
         }
     } catch (err) {
         debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
+        debugLogger('DEBUG: Falling back to default addresses: %o', fallbackMultiaddrs);
         return fallbackMultiaddrs;
     }
 }
