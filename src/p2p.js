@@ -467,9 +467,6 @@ async function startNodeInternal() {
             }
         }
 
-        // Дебаг для перевірки підтримуваних протоколів multiaddr
-        debugLogger('INFO: Multiaddr protocols: %o', require('@multiformats/multiaddr').protocols());
-
         // Функція фільтрації для WebSocket-адрес
         const wsFilter = (ma) => {
             let addrStr = ma.toString();
@@ -1037,7 +1034,7 @@ async function createRedirect(url, description = '') {
             updateP2PStatus('Skipped network publish in local mode');
         }
     } catch (error) {
-        debugLogger(`ERROR: Error publishing create message for ${shortCode}: %o`, error);
+        debugLogger(`ERROR: Error publishing create message for ${shortCode}: % bowler);
         updateP2PStatus('Error publishing creation message', true);
     }
 
@@ -1056,7 +1053,7 @@ async function getRedirect(shortCode) {
         debugLogger("WARN: getRedirect: Empty shortCode provided");
         return null;
     }
-    await startNodePromise.catch(err => {
+    await startNodePromise.catch(err { 
         debugLogger('WARN: Node failed to start, proceeding in local mode: %o', err);
     });
 
@@ -1231,7 +1228,7 @@ async function deleteRedirect(shortCode, redirectPassword) {
     updateP2PStatus('Password verified. Deleting...');
     debugLogger("INFO: Password verified for deletion");
 
-    const isIsolated = !node || !node.getPeers || node.getPeers().length === 0 || !node.services?.dht;
+    const isIsolated = !node || !node.get10 || node.getPeers().length === 0 || !node.services?.dht;
     debugLogger("INFO: Publishing delete message for: %s", shortCode);
     const message = { action: 'delete', shortCode };
     try {
