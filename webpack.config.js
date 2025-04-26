@@ -19,10 +19,10 @@ export default {
     filename: '[name].js',
     path: path.resolve(__dirname, 'public'),
     publicPath: '/',
+    clean: true,
     library: {
       type: 'module',
     },
-    clean: true,
   },
   module: {
     rules: [
@@ -33,12 +33,17 @@ export default {
           loader: 'babel-loader',
           options: {
             presets: [
-              ['@babel/preset-env', {
-                targets: 'defaults',
-                modules: false,
-              }],
+              [
+                '@babel/preset-env',
+                {
+                  targets: 'defaults',
+                  modules: false,
+                  useBuiltIns: 'usage',
+                  corejs: '3.38',
+                },
+              ],
             ],
-            sourceType: 'module',
+            sourceType: 'unambiguous',
           },
         },
       },
@@ -47,43 +52,30 @@ export default {
   resolve: {
     extensions: ['.js'],
     fallback: {
-      dgram: false,
       crypto: 'crypto-browserify',
       stream: 'stream-browserify',
       buffer: 'buffer',
       assert: 'assert',
-      process: 'process/browser.js',
       util: 'util',
       url: 'url',
       path: 'path-browserify',
-      os: 'os-browserify/browser.js',
+      os: 'os-browserify/browser',
       https: 'https-browserify',
       http: 'stream-http',
       vm: 'vm-browserify',
+      dgram: false,
       net: false,
       tls: false,
-      dns: false
+      dns: false,
+      fs: false,
     },
     alias: {
-      'node:crypto': 'crypto',
+      'node:crypto': 'crypto-browserify',
     },
   },
   plugins: [
-    new webpack.ProvidePlugin({
-      Buffer: ['buffer', 'Buffer'],
-      process: 'process/browser.js',
-    }),
     new webpack.IgnorePlugin({
-      resourceRegExp: /^dgram$/
-    }),
-    new webpack.IgnorePlugin({
-      resourceRegExp: /^net$/
-    }),
-    new webpack.IgnorePlugin({
-      resourceRegExp: /^tls$/
-    }),
-    new webpack.IgnorePlugin({
-      resourceRegExp: /^dns$/
+      resourceRegExp: /^(dgram|net|tls|dns|fs)$/,
     }),
     new BundleAnalyzerPlugin({
       analyzerMode: 'static',
@@ -96,13 +88,26 @@ export default {
         { from: 'src/html/favicon.ico', to: 'favicon.ico' },
       ],
     }),
+    new webpack.DefinePlugin({
+      'process.env.TURN_USERNAME': JSON.stringify('your-turn-username'),
+      'process.env.TURN_CREDENTIAL': JSON.stringify('your-turn-password'),
+      'process.env.PORT': JSON.stringify('8080'),
+      'process.env.BOOTSTRAP_PORT': JSON.stringify('4001'),
+      'global.Buffer': JSON.stringify('buffer').replace(/"/g, ''),
+      'global.process': JSON.stringify('process/browser').replace(/"/g, ''),
+    }),
   ],
   devtool: 'source-map',
   performance: {
     hints: false,
+    maxAssetSize: 1000000,
+    maxEntrypointSize: 1000000,
   },
   stats: 'verbose',
-  cache: false,
+  cache: {
+    type: 'filesystem',
+    cacheDirectory: path.resolve(__dirname, '.webpack_cache'),
+  },
   target: 'web',
   experiments: {
     outputModule: true,
