@@ -355,7 +355,7 @@ async function fetchBootstrapAddress() {
     const bootstrapUrl = isLocalhost
         ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
         : 'https://libp2p.onrender.com/bootstrap-address';
-    const fallbackMultiaddrs = []; // Видалено стандартні вузли, оскільки вони несумісні з браузером
+    const fallbackMultiaddrs = [];
 
     try {
         debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
@@ -467,10 +467,19 @@ async function startNodeInternal() {
             }
         }
 
+        // Дебаг для перевірки підтримуваних протоколів multiaddr
+        debugLogger('INFO: Multiaddr protocols: %o', require('@multiformats/multiaddr').protocols());
+
         // Функція фільтрації для WebSocket-адрес
         const wsFilter = (ma) => {
             let addrStr = ma.toString();
             debugLogger('INFO: Original WebSocket multiaddr: %s', addrStr);
+
+            // Пропускаємо адреси з /webrtc
+            if (addrStr.includes('/webrtc')) {
+                debugLogger('INFO: Skipping WebRTC address: %s', addrStr);
+                return ma;
+            }
 
             if (!isLocalhost && addrStr.includes('ws://')) {
                 addrStr = addrStr.replace('ws://', 'wss://');
@@ -491,10 +500,20 @@ async function startNodeInternal() {
             return multiaddr(addrStr);
         };
 
+        // Дебаг для WebRTC
+        debugLogger('INFO: Initializing WebRTC transport with ICE servers: %o', {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' }
+            ]
+        });
+
         // Конфігурація Libp2p
         const config = {
             addresses: {
-                listen: ['/webrtc', '/p2p-circuit']
+                listen: ['/p2p-circuit'] // Видалено /webrtc
             },
             transports: [
                 webSockets({
