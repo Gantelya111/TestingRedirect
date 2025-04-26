@@ -35,10 +35,10 @@ export default {
             presets: [
               ['@babel/preset-env', {
                 targets: 'defaults',
-                modules: false, // Зберігаємо ESM
+                modules: false,
               }],
             ],
-            sourceType: 'module', // Явно вказуємо, що код є ESM
+            sourceType: 'module',
           },
         },
       },
@@ -47,7 +47,7 @@ export default {
   resolve: {
     extensions: ['.js'],
     fallback: {
-      dgram: false, // Ігноруємо dgram для усунення помилки
+      dgram: false,
       crypto: 'crypto-browserify',
       stream: 'stream-browserify',
       buffer: 'buffer',
@@ -60,6 +60,9 @@ export default {
       https: 'https-browserify',
       http: 'stream-http',
       vm: 'vm-browserify',
+      net: false,
+      tls: false,
+      dns: false
     },
     alias: {
       'node:crypto': 'crypto',
@@ -71,7 +74,16 @@ export default {
       process: 'process/browser.js',
     }),
     new webpack.IgnorePlugin({
-      resourceRegExp: /^dgram$/ // Явно ігноруємо dgram
+      resourceRegExp: /^dgram$/
+    }),
+    new webpack.IgnorePlugin({
+      resourceRegExp: /^net$/
+    }),
+    new webpack.IgnorePlugin({
+      resourceRegExp: /^tls$/
+    }),
+    new webpack.IgnorePlugin({
+      resourceRegExp: /^dns$/
     }),
     new BundleAnalyzerPlugin({
       analyzerMode: 'static',
@@ -93,6 +105,6 @@ export default {
   cache: false,
   target: 'web',
   experiments: {
-    outputModule: true, // Увімкнення підтримки ESM
+    outputModule: true,
   },
 };
