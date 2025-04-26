@@ -431,6 +431,7 @@ function updateP2PStatus(status, isError = false) {
 
 /**
  * Запуск Libp2p вузла з прискореною ініціалізацією
+ * Found in: https://github.com/libp2p/js-libp2p/blob/master/doc/CONFIGURATION.md
  * @returns {Promise<import('libp2p').Libp2p>}
  */
 async function startNodeInternal() {
@@ -510,7 +511,7 @@ async function startNodeInternal() {
         // Конфігурація Libp2p
         const config = {
             addresses: {
-                listen: ['/p2p-circuit'] // Видалено /webrtc
+                listen: [] // В браузері не потрібні явні адреси прослуховування
             },
             transports: [
                 webSockets({
