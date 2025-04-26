@@ -211,9 +211,12 @@ startBootstrapNode().catch((err) => {
   process.exit(1);
 });
 
-process.on('SIG  async () => {
+process.on('SIGTERM', async () => {
   debugLogger('INFO: Received SIGTERM, shutting down...');
-  if (node) await node.stop();
+  if (node) {
+    await node.stop();
+    debugLogger('INFO: Libp2p node stopped');
+  }
   server.close(() => {
     debugLogger('INFO: HTTP server closed');
     process.exit(0);
