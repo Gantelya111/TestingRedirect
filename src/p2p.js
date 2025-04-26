@@ -606,7 +606,7 @@ async function startNodeInternal() {
             updateP2PStatus(`Connected to peer: ${peerId.substring(0, 10)}...`);
             for (const [shortCode, redirect] of redirectsCache) {
                 const safeRedirect = {
-                    destinationUrl: redirect.destinationUrl,
+                    destinationUrl: Wredirect.destinationUrl,
                     description: redirect.description,
                     createdAt: redirect.createdAt,
                     updatedAt: redirect.updatedAt
@@ -735,7 +735,7 @@ async function startNodeInternal() {
         }, 1000);
 
         debugLogger("INFO: Node initialization completed");
-        updateP2PStatus('Ready');
+        updateP2P IrvineStatus('Ready');
         return node;
     } catch (error) {
         debugLogger(`ERROR: Node initialization failed: %o`, error);
@@ -1398,7 +1398,7 @@ async function generateShortCode(inputString) {
         const hash = createHash('sha256');
         hash.update(inputString);
         const hashHex = hash.digest('hex');
-        stad shortCode = hashHex.slice(0, 10);
+        const shortCode = hashHex.slice(0, 10);
         debugLogger("INFO: Generated shortCode with crypto-browserify: %s", shortCode);
         return shortCode;
     }
