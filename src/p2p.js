@@ -355,7 +355,10 @@ async function fetchBootstrapAddress() {
     const bootstrapUrl = isLocalhost
         ? 'http://localhost:' + (process.env.PORT || 3000) + '/bootstrap-address'
         : 'https://libp2p.onrender.com/bootstrap-address';
-    const fallbackMultiaddrs = [];
+    const fallbackMultiaddrs = [
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5i1FxheG2QeQcg3EsxS7bL63wQXoJYH'
+    ];
 
     try {
         debugLogger('INFO: Fetching bootstrap address from ' + bootstrapUrl);
@@ -371,12 +374,12 @@ async function fetchBootstrapAddress() {
                 modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
             }
             debugLogger('INFO: Received and modified bootstrap address: ' + modifiedAddr);
-            return [modifiedAddr, ...fallbackMultiaddrs].filter(addr => addr.includes('/wss'));
+            return [modifiedAddr, ...fallbackMultiaddrs].filter(addr => addr.includes('/wss') || addr.includes('/p2p'));
         }
         throw new Error('Invalid bootstrap address');
     } catch (err) {
         debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
-        debugLogger('INFO: Falling back to empty bootstrap list');
+        debugLogger('INFO: Falling back to default bootstrap list');
         return fallbackMultiaddrs;
     }
 }
@@ -472,7 +475,6 @@ async function startNodeInternal() {
             let addrStr = ma.toString();
             debugLogger('INFO: Original WebSocket multiaddr: ' + addrStr);
 
-            // Пропускаємо адреси з /webrtc
             if (addrStr.includes('/webrtc')) {
                 debugLogger('INFO: Skipping WebRTC address: ' + addrStr);
                 return ma;
