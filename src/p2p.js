@@ -606,7 +606,7 @@ async function startNodeInternal() {
             updateP2PStatus(`Connected to peer: ${peerId.substring(0, 10)}...`);
             for (const [shortCode, redirect] of redirectsCache) {
                 const safeRedirect = {
-                    destinationUrl: Wredirect.destinationUrl,
+                    destinationUrl: redirect.destinationUrl,
                     description: redirect.description,
                     createdAt: redirect.createdAt,
                     updatedAt: redirect.updatedAt
@@ -735,7 +735,7 @@ async function startNodeInternal() {
         }, 1000);
 
         debugLogger("INFO: Node initialization completed");
-        updateP2P IrvineStatus('Ready');
+        updateP2PStatus('Ready');
         return node;
     } catch (error) {
         debugLogger(`ERROR: Node initialization failed: %o`, error);
