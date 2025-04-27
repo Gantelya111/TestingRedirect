@@ -86,11 +86,14 @@ async function startBootstrapNode() {
     debugLogger('INFO: Налаштування Libp2p...');
     node = await createLibp2p({
       addresses: {
-        listen: ['/ip4/0.0.0.0/tcp/4001', '/ip4/0.0.0.0/tcp/4002/ws'],
+        listen: ['/ip4/0.0.0.0/tcp/4002', '/ip4/0.0.0.0/tcp/4003/ws'],
       },
       transports: [tcp(), webSockets()],
       connectionEncryption: [noise()],
       streamMuxers: [mplex()],
+      transportManager: {
+        faultTolerance: 'NO_FATAL' // Ігнорувати помилки прив’язки до портів
+      },
       services: {
         identify: identify(),
         dht: kadDHT({
@@ -113,7 +116,7 @@ async function startBootstrapNode() {
     // Логіка оточення
     const isProduction = true; // Для деплою на Render
     const domain = isProduction ? 'libp2p.onrender.com' : 'localhost';
-    const tcpPort = isProduction ? 443 : 4002;
+    const tcpPort = isProduction ? 443 : 4003; // 443 для wss на Render
     selectedMultiaddr = `/dns4/${domain}/tcp/${tcpPort}/wss/p2p/${node.peerId.toString()}`;
     debugLogger('INFO: Вибрана адреса: %s', selectedMultiaddr);
 
@@ -203,10 +206,11 @@ app.get('/redirects', (req, res) => {
   res.json(redirects);
 });
 
-const PORT = 4001;
+// Використовуємо PORT із змінної оточення або 8080
+const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
   debugLogger('INFO: Сервер запущено на порту %d', PORT);
-  debugLogger('INFO: WebSocket URL: ws://localhost:4001/ws');
+  debugLogger('INFO: WebSocket URL: ws://localhost:%d/ws', PORT);
 });
 
 startBootstrapNode().catch((err) => {
