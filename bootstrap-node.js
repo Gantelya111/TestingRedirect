@@ -21,7 +21,7 @@ const debugLogger = logger('bootstrap-node');
 
 const DHT_PUT_OPTIONS = { timeout: 60000 };
 const KEY_PREFIX = '/redirect-p2p/entry/';
-const topic = 'redirects-changes-v4';
+const topic = 'redirects-changes-v3'; // Changed to match p2p.js
 
 let node;
 let selectedMultiaddr;
@@ -93,14 +93,12 @@ async function startBootstrapNode() {
         identify: identify(),
         dht: kadDHT({
           protocol: '/p2p-redirect/kad/1.0.0',
-          clientMode: false,
-        },
-        pubsub: gossipsub({
-          allowPublishToZeroPeers: true,
+          clientMode: false
         }),
+        pubsub: gossipsub({ allowPublishToZeroPeers: true }),
         circuitRelay: circuitRelayServer(),
-        ping: ping(),
-      },
+        ping: ping()
+      }
     });
 
     await node.start();
@@ -110,7 +108,7 @@ async function startBootstrapNode() {
     debugLogger('INFO: Listening on: %o', multiaddrs);
 
     // Hardcode environment logic
-    const isProduction = false; // Set to true for Render deployment
+    const isProduction = true; // Set to true for Render deployment
     const domain = isProduction ? 'libp2p.onrender.com' : 'localhost';
     const tcpPort = isProduction ? 443 : 4002;
     selectedMultiaddr = `/dns4/${domain}/tcp/${tcpPort}/wss/p2p/${node.peerId.toString()}`;
