@@ -353,36 +353,36 @@ async function publishStaticFiles() {
  * @returns {Promise<string[]>}
  */
 async function fetchBootstrapAddress() {
-    const bootstrapUrl = isLocalhost
-        ? `http://localhost:${process.env.PORT || 3000}/bootstrap-address`
-        : 'https://libp2p.onrender.com/bootstrap-address';
-    const fallbackMultiaddrs = [
-        '/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-        '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ'
-    ];
-
-    try {
-        debugLogger('INFO: Fetching bootstrap address from %s', bootstrapUrl);
-        const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
-        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-        const data = await response.json();
-        if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-            let modifiedAddr = data.multiaddr;
-            if (!isLocalhost && modifiedAddr.includes('ws://')) {
-                modifiedAddr = modifiedAddr.replace('ws://', 'wss://');
-            }
-            if (modifiedAddr.includes('wss//')) {
-                modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
-            }
-            debugLogger('INFO: Received and modified bootstrap address: %s', modifiedAddr);
-            return [modifiedAddr, ...fallbackMultiaddrs].filter(addr => addr.includes('/wss') || addr.includes('/tcp'));
-        }
-        throw new Error('Invalid bootstrap address');
-    } catch (err) {
-        debugLogger('ERROR: Failed to fetch bootstrap address: %o', err);
-        debugLogger('INFO: Falling back to public bootstrap list: %o', fallbackMultiaddrs);
-        return fallbackMultiaddrs;
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const bootstrapUrl = isLocalhost
+    ? 'http://localhost:8080/bootstrap-address'
+    : 'https://libp2p.onrender.com/bootstrap-address';
+  const fallbackMultiaddrs = [
+    '/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+    '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ'
+  ];
+  try {
+    debugLogger('INFO: Запитую адресу бутстрапа з %s', bootstrapUrl);
+    const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Помилка HTTP: ${response.status}`);
+    const data = await response.json();
+    if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
+      let modifiedAddr = data.multiaddr;
+      if (!isLocalhost && modifiedAddr.includes('ws://')) {
+        modifiedAddr = modifiedAddr.replace('ws://', 'wss://');
+      }
+      if (modifiedAddr.includes('wss//')) {
+        modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
+      }
+      debugLogger('INFO: Отримано і змінено адресу бутстрапа: %s', modifiedAddr);
+      return [modifiedAddr, ...fallbackMultiaddrs].filter(addr => addr.includes('/wss') || addr.includes('/tcp'));
     }
+    throw new Error('Некоректна адреса бутстрапа');
+  } catch (err) {
+    debugLogger('ERROR: Не вдалося отримати адресу бутстрапа: %o', err);
+    debugLogger('INFO: Використовую резервний список бутстрапів: %o', fallbackMultiaddrs);
+    return fallbackMultiaddrs;
+  }
 }
 
 /**
