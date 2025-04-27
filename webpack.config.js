@@ -8,7 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default {
-  mode: 'development',
+  mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
   entry: {
     'p2p-app': './src/p2p-app-src.js',
     'manager': './src/manager-src.js',
@@ -63,6 +63,7 @@ export default {
       https: 'https-browserify',
       http: 'stream-http',
       vm: 'vm-browserify',
+      process: 'process/browser', // Додано для process
       dgram: false,
       net: false,
       tls: false,
@@ -77,6 +78,18 @@ export default {
     new webpack.IgnorePlugin({
       resourceRegExp: /^(dgram|net|tls|dns|fs)$/,
     }),
+    new webpack.ProvidePlugin({
+      process: 'process/browser', // Автоматично підключаємо process
+      Buffer: ['buffer', 'Buffer'], // Для модулів, що потребують Buffer
+    }),
+    new webpack.DefinePlugin({
+      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
+      'process.env.TURN_USERNAME': JSON.stringify('your-turn-username'),
+      'process.env.TURN_CREDENTIAL': JSON.stringify('your-turn-password'),
+      'process.env.PORT': JSON.stringify('8080'), // Синхронізовано з bootstrap-node.js
+      'process.env.BOOTSTRAP_PORT': JSON.stringify('4003'), // Для WebSocket
+      'global.Buffer': JSON.stringify('buffer').replace(/"/g, ''),
+    }),
     new BundleAnalyzerPlugin({
       analyzerMode: 'static',
       openAnalyzer: false,
@@ -88,16 +101,8 @@ export default {
         { from: 'src/html/favicon.ico', to: 'favicon.ico' },
       ],
     }),
-    new webpack.DefinePlugin({
-      'process.env.TURN_USERNAME': JSON.stringify('your-turn-username'),
-      'process.env.TURN_CREDENTIAL': JSON.stringify('your-turn-password'),
-      'process.env.PORT': JSON.stringify('8080'),
-      'process.env.BOOTSTRAP_PORT': JSON.stringify('4001'),
-      'global.Buffer': JSON.stringify('buffer').replace(/"/g, ''),
-      'global.process': JSON.stringify('process/browser').replace(/"/g, ''),
-    }),
   ],
-  devtool: 'source-map',
+  devtool: process.env.NODE_ENV === 'production' ? 'source-map' : 'eval-source-map',
   performance: {
     hints: false,
     maxAssetSize: 1000000,
