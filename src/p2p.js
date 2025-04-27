@@ -13,6 +13,7 @@ import { fromString as uint8ArrayFromString, toString as uint8ArrayToString } fr
 import { multiaddr } from '@multiformats/multiaddr';
 import { logger } from '@libp2p/logger';
 import { createHash } from 'crypto';
+import { prometheusMetrics } from '@libp2p/prometheus-metrics';
 
 // Local logger
 const debugLogger = logger('p2p-app');
@@ -607,9 +608,7 @@ async function startNodeInternal() {
                 autoDial: true,
                 dialTimeout: 10000
             },
-            metrics: {
-                enabled: true
-            }
+            metrics: undefined // Вимкнено метрики для обходу помилки
         };
         debugLogger("INFO: Libp2p config: %o", config);
 
@@ -799,7 +798,6 @@ async function startNodeInternal() {
         throw error;
     }
 }
-
 /**
  * Start HTTP polling as a fallback mechanism
  */
