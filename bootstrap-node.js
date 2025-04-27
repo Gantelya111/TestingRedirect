@@ -16,12 +16,12 @@ import { WebSocketServer } from 'ws';
 import http from 'http';
 import { logger } from '@libp2p/logger';
 
-// Local logger
+// Локальний логер
 const debugLogger = logger('bootstrap-node');
 
 const DHT_PUT_OPTIONS = { timeout: 60000 };
 const KEY_PREFIX = '/redirect-p2p/entry/';
-const topic = 'redirects-changes-v3'; // Changed to match p2p.js
+const topic = 'redirects-changes-v3'; // Синхронізовано з p2p.js
 
 let node;
 let selectedMultiaddr;
@@ -29,7 +29,7 @@ const redirectsCache = new Map();
 
 async function publishNodeAddress() {
   if (!node || node.status !== 'started' || !node.services.dht) {
-    debugLogger('WARN: Cannot publish node address: node or DHT not ready');
+    debugLogger('WARN: Не можу опублікувати адресу вузла: вузол або DHT не готові');
     return;
   }
   const nodeKey = `/p2p-nodes/${node.peerId.toString()}`;
@@ -43,9 +43,9 @@ async function publishNodeAddress() {
       uint8ArrayFromString(nodeValue),
       DHT_PUT_OPTIONS
     );
-    debugLogger('INFO: Published node address: %s', nodeKey);
+    debugLogger('INFO: Опубліковано адресу вузла: %s', nodeKey);
   } catch (err) {
-    debugLogger('ERROR: Failed to publish node address: %o', err);
+    debugLogger('ERROR: Не вдалося опублікувати адресу вузла: %o', err);
   }
 }
 
@@ -53,7 +53,7 @@ async function handlePubsubMessage(evt) {
   if (evt.detail.topic !== topic) return;
   try {
     const message = JSON.parse(uint8ArrayToString(evt.detail.data));
-    debugLogger('INFO: PubSub message: %o', message);
+    debugLogger('INFO: Повідомлення PubSub: %o', message);
     if (!message.action || !message.shortCode) return;
 
     const { action, shortCode, redirect } = message;
@@ -67,21 +67,23 @@ async function handlePubsubMessage(evt) {
             ...redirect,
             passwordHash: current.passwordHash || redirect.passwordHash,
           });
-          debugLogger('INFO: Cached %s: %s', action, shortCode);
+          debugLogger('INFO: Закешовано %s: %s', action, shortCode);
         }
         break;
       case 'delete':
         redirectsCache.delete(shortCode);
-        debugLogger('INFO: Deleted redirect: %s', shortCode);
+        debugLogger('INFO: Видалено редирект: %s', shortCode);
         break;
     }
   } catch (err) {
-    debugLogger('ERROR: Failed to handle PubSub: %o', err);
+    debugLogger('ERROR: Не вдалося обробити PubSub: %o', err);
   }
 }
 
 async function startBootstrapNode() {
+  debugLogger('INFO: Починаю запуск бутстрап-вузла');
   try {
+    debugLogger('INFO: Налаштування Libp2p...');
     node = await createLibp2p({
       addresses: {
         listen: ['/ip4/0.0.0.0/tcp/4001', '/ip4/0.0.0.0/tcp/4002/ws'],
@@ -101,22 +103,23 @@ async function startBootstrapNode() {
       }
     });
 
+    debugLogger('INFO: Запускаю вузол...');
     await node.start();
-    debugLogger('INFO: Bootstrap node started with ID: %s', node.peerId.toString());
+    debugLogger('INFO: Бутстрап-вузол запущено з ID: %s', node.peerId.toString());
 
     const multiaddrs = node.getMultiaddrs().map(ma => ma.toString());
-    debugLogger('INFO: Listening on: %o', multiaddrs);
+    debugLogger('INFO: Слухаю на адресах: %o', multiaddrs);
 
-    // Hardcode environment logic
-    const isProduction = true; // Set to true for Render deployment
+    // Логіка оточення
+    const isProduction = true; // Для деплою на Render
     const domain = isProduction ? 'libp2p.onrender.com' : 'localhost';
     const tcpPort = isProduction ? 443 : 4002;
     selectedMultiaddr = `/dns4/${domain}/tcp/${tcpPort}/wss/p2p/${node.peerId.toString()}`;
-    debugLogger('INFO: Selected multiaddr: %s', selectedMultiaddr);
+    debugLogger('INFO: Вибрана адреса: %s', selectedMultiaddr);
 
     if (node.services.pubsub) {
       node.services.pubsub.subscribe(topic);
-      debugLogger('INFO: Subscribed to PubSub topic: %s', topic);
+      debugLogger('INFO: Підписано на PubSub тему: %s', topic);
       node.services.pubsub.addEventListener('message', handlePubsubMessage);
     }
 
@@ -124,15 +127,17 @@ async function startBootstrapNode() {
     setInterval(publishNodeAddress, 5 * 60 * 1000);
 
     node.addEventListener('peer:discovery', (evt) => {
-      debugLogger('INFO: Discovered peer: %s', evt.detail.id.toString());
+      debugLogger('INFO: Виявлено піра: %s', evt.detail.id.toString());
     });
     node.addEventListener('peer:connect', (evt) => {
-      debugLogger('INFO: Connected to peer: %s', evt.detail.toString());
+      debugLogger('INFO: Підключено до піра: %s', evt.detail.toString());
     });
 
+    debugLogger('INFO: Бутстрап-вузол успішно запущено');
     return node;
   } catch (err) {
-    debugLogger('ERROR: Failed to start bootstrap node: %o', err);
+    debugLogger('ERROR: Помилка запуску бутстрап-вузла: %o', err);
+    console.error('Помилка запуску бутстрап-вузла:', err.stack);
     throw err;
   }
 }
@@ -142,20 +147,20 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws) => {
-  debugLogger('INFO: WebSocket client connected');
+  debugLogger('INFO: Підключено WebSocket клієнта');
   if (node && node.status === 'started' && selectedMultiaddr) {
     ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
   } else {
-    ws.send(JSON.stringify({ status: 'error', message: 'Bootstrap node not ready' }));
+    ws.send(JSON.stringify({ status: 'error', message: 'Бутстрап-вузол не готовий' }));
   }
   ws.on('message', (message) => {
-    debugLogger('INFO: WebSocket message: %s', message.toString());
+    debugLogger('INFO: Повідомлення WebSocket: %s', message.toString());
     if (node && node.status === 'started' && selectedMultiaddr) {
       ws.send(JSON.stringify({ status: 'ok', multiaddr: selectedMultiaddr }));
     }
   });
-  ws.on('error', (err) => debugLogger('ERROR: WebSocket error: %o', err));
-  ws.on('close', () => debugLogger('INFO: WebSocket client disconnected'));
+  ws.on('error', (err) => debugLogger('ERROR: Помилка WebSocket: %o', err));
+  ws.on('close', () => debugLogger('INFO: WebSocket клієнт відключений'));
 });
 
 app.use(
@@ -178,11 +183,11 @@ app.get('/health', (req, res) => {
 
 app.get('/bootstrap-address', (req, res) => {
   if (node && node.status === 'started' && selectedMultiaddr) {
-    debugLogger('INFO: Serving bootstrap address: %s', selectedMultiaddr);
+    debugLogger('INFO: Повертаю адресу бутстрапа: %s', selectedMultiaddr);
     res.json({ multiaddr: selectedMultiaddr });
   } else {
-    debugLogger('ERROR: Bootstrap node not started');
-    res.status(500).json({ error: 'Bootstrap node not started' });
+    debugLogger('ERROR: Бутстрап-вузол не запущено');
+    res.status(500).json({ error: 'Бутстрап-вузол не запущено' });
   }
 });
 
@@ -194,29 +199,30 @@ app.get('/redirects', (req, res) => {
     createdAt: redirect.createdAt,
     updatedAt: redirect.updatedAt,
   }));
-  debugLogger('INFO: Serving redirects: %o', redirects);
+  debugLogger('INFO: Повертаю редиректи: %o', redirects);
   res.json(redirects);
 });
 
 const PORT = 4001;
 server.listen(PORT, () => {
-  debugLogger('INFO: Server running on port %d', PORT);
+  debugLogger('INFO: Сервер запущено на порту %d', PORT);
   debugLogger('INFO: WebSocket URL: ws://localhost:4001/ws');
 });
 
 startBootstrapNode().catch((err) => {
-  debugLogger('ERROR: Error starting bootstrap node: %o', err);
+  debugLogger('ERROR: Критична помилка запуску бутстрап-вузла: %o', err);
+  console.error('Критична помилка:', err.stack);
   process.exit(1);
 });
 
 process.on('SIGTERM', async () => {
-  debugLogger('INFO: Received SIGTERM, shutting down...');
+  debugLogger('INFO: Отримано SIGTERM, завершую роботу...');
   if (node) {
     await node.stop();
-    debugLogger('INFO: Libp2p node stopped');
+    debugLogger('INFO: Вузол Libp2p зупинено');
   }
   server.close(() => {
-    debugLogger('INFO: HTTP server closed');
+    debugLogger('INFO: HTTP сервер зупинено');
     process.exit(0);
   });
 });
