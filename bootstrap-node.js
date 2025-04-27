@@ -13,8 +13,9 @@ import cors from 'cors';
 import { multiaddr as Multiaddr } from '@multiformats/multiaddr';
 import { fromString as uint8ArrayFromString, toString as uint8ArrayToString } from 'uint8arrays';
 import { WebSocketServer } from 'ws';
-import http from 'http';
+import { createServer } from 'http';
 import { logger } from '@libp2p/logger';
+import net from 'net';
 
 // Локальний логер
 const debugLogger = logger('bootstrap-node');
@@ -26,6 +27,31 @@ const topic = 'redirects-changes-v3'; // Синхронізовано з p2p.js
 let node;
 let selectedMultiaddr;
 const redirectsCache = new Map();
+
+const isProduction = process.env.NODE_ENV === 'production';
+const HTTP_PORT = process.env.PORT || 8080;
+const BOOTSTRAP_PORT_START = 4001;
+const BOOTSTRAP_PORT_RANGE = 100; // Спробувати порти від 4001 до 4100
+
+// Функція для пошуку вільного порту
+async function findFreePort(startPort, range) {
+  const endPort = startPort + range;
+  for (let port = startPort; port <= endPort; port++) {
+    const isFree = await new Promise((resolve) => {
+      const server = net.createServer();
+      server.unref();
+      server.on('error', () => resolve(false));
+      server.listen(port, '0.0.0.0', () => {
+        server.close(() => resolve(true));
+      });
+    });
+    if (isFree) {
+      debugLogger('INFO: Знайдено вільний порт: %d', port);
+      return port;
+    }
+  }
+  throw new Error('Не вдалося знайти вільний порт у діапазоні');
+}
 
 async function publishNodeAddress() {
   if (!node || node.status !== 'started' || !node.services.dht) {
@@ -82,11 +108,22 @@ async function handlePubsubMessage(evt) {
 
 async function startBootstrapNode() {
   debugLogger('INFO: Починаю запуск бутстрап-вузла');
+  let bootstrapPort;
+  try {
+    bootstrapPort = await findFreePort(BOOTSTRAP_PORT_START, BOOTSTRAP_PORT_RANGE);
+  } catch (err) {
+    debugLogger('ERROR: %o', err);
+    throw err;
+  }
+
   try {
     debugLogger('INFO: Налаштування Libp2p...');
     node = await createLibp2p({
       addresses: {
-        listen: ['/ip4/0.0.0.0/tcp/4001', '/ip4/0.0.0.0/tcp/4002/ws'],
+        listen: [
+          `/ip4/0.0.0.0/tcp/${bootstrapPort}`,
+          `/ip4/0.0.0.0/tcp/${bootstrapPort + 1}/ws`
+        ],
       },
       transports: [tcp(), webSockets()],
       connectionEncryption: [noise()],
@@ -100,6 +137,9 @@ async function startBootstrapNode() {
         pubsub: gossipsub({ allowPublishToZeroPeers: true }),
         circuitRelay: circuitRelayServer(),
         ping: ping()
+      },
+      transportManager: {
+        faultTolerance: 'NO_FATAL' // Ігнорувати невдалі адреси
       }
     });
 
@@ -111,10 +151,9 @@ async function startBootstrapNode() {
     debugLogger('INFO: Слухаю на адресах: %o', multiaddrs);
 
     // Логіка оточення
-    const isProduction = true; // Для деплою на Render
     const domain = isProduction ? 'libp2p.onrender.com' : 'localhost';
-    const tcpPort = isProduction ? 443 : 4002;
-    selectedMultiaddr = `/dns4/${domain}/tcp/${tcpPort}/wss/p2p/${node.peerId.toString()}`;
+    const wsPort = isProduction ? bootstrapPort + 1 : bootstrapPort + 1;
+    selectedMultiaddr = `/dns4/${domain}/tcp/${wsPort}/wss/p2p/${node.peerId.toString()}`;
     debugLogger('INFO: Вибрана адреса: %s', selectedMultiaddr);
 
     if (node.services.pubsub) {
@@ -143,7 +182,7 @@ async function startBootstrapNode() {
 }
 
 const app = express();
-const server = http.createServer(app);
+const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws) => {
@@ -203,10 +242,9 @@ app.get('/redirects', (req, res) => {
   res.json(redirects);
 });
 
-const PORT = 4001;
-server.listen(PORT, () => {
-  debugLogger('INFO: Сервер запущено на порту %d', PORT);
-  debugLogger('INFO: WebSocket URL: ws://localhost:4001/ws');
+server.listen(HTTP_PORT, () => {
+  debugLogger('INFO: Сервер запущено на порту %d', HTTP_PORT);
+  debugLogger('INFO: WebSocket URL: ws://%s:%d/ws', isProduction ? 'libp2p.onrender.com' : 'localhost', HTTP_PORT);
 });
 
 startBootstrapNode().catch((err) => {
