@@ -12,7 +12,7 @@ import { circuitRelayTransport, circuitRelayServer } from '@libp2p/circuit-relay
 import { fromString as uint8ArrayFromString, toString as uint8ArrayToString } from 'uint8arrays';
 import { multiaddr } from '@multiformats/multiaddr';
 import { logger } from '@libp2p/logger';
-import { createHash } from 'crypto'; // For Node.js or browser polyfill (crypto-browserify)
+import { createHash } from 'crypto';
 
 // Local logger
 const debugLogger = logger('p2p-app');
@@ -23,7 +23,7 @@ const isSecureContext = isBrowser && window.isSecureContext;
 const isCryptoAvailable = typeof globalThis.crypto !== 'undefined' && globalThis.crypto.subtle && typeof globalThis.crypto.subtle.digest === 'function';
 const isLocalhost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const isHttps = isBrowser && window.location.protocol === 'https:';
-const enableMDNS = isLocalhost && process.env.ENABLE_MDNS === 'true';
+const enableMDNS = isLocalhost && (typeof process !== 'undefined' && process.env?.ENABLE_MDNS === 'true');
 debugLogger('INFO: Environment check - Browser: %o, SecureContext: %o, CryptoAvailable: %o, Localhost: %o, HTTPS: %o, MDNS: %o',
     isBrowser, isSecureContext, isCryptoAvailable, isLocalhost, isHttps, enableMDNS);
 
@@ -49,7 +49,7 @@ let syncIntervalId = null;
 
 // Test WebSocket connection for debugging
 if (isBrowser) {
-    const wsUrl = isLocalhost ? 'ws://localhost:3000/ws' : 'wss://libp2p.onrender.com/ws';
+    const wsUrl = isLocalhost ? 'ws://localhost:8080/ws' : 'wss://libp2p.onrender.com/ws';
     const ws = new WebSocket(wsUrl);
     ws.onopen = () => debugLogger('INFO: WebSocket connection established to %s', wsUrl);
     ws.onerror = (err) => debugLogger('ERROR: WebSocket connection failed to %s: %o', wsUrl, err);
@@ -353,36 +353,36 @@ async function publishStaticFiles() {
  * @returns {Promise<string[]>}
  */
 async function fetchBootstrapAddress() {
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const bootstrapUrl = isLocalhost
-    ? 'http://localhost:8080/bootstrap-address'
-    : 'https://libp2p.onrender.com/bootstrap-address';
-  const fallbackMultiaddrs = [
-    '/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-    '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ'
-  ];
-  try {
-    console.log('INFO: Запитую адресу бутстрапа з', bootstrapUrl);
-    const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`Помилка HTTP: ${response.status}`);
-    const data = await response.json();
-    if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-      let modifiedAddr = data.multiaddr;
-      if (!isLocalhost && modifiedAddr.includes('ws://')) {
-        modifiedAddr = modifiedAddr.replace('ws://', 'wss://');
-      }
-      if (modifiedAddr.includes('wss//')) {
-        modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
-      }
-      console.log('INFO: Отримано і змінено адресу бутстрапа:', modifiedAddr);
-      return [modifiedAddr, ...fallbackMultiaddrs].filter(addr => addr.includes('/wss') || addr.includes('/tcp'));
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const bootstrapUrl = isLocalhost
+        ? 'http://localhost:8080/bootstrap-address'
+        : 'https://libp2p.onrender.com/bootstrap-address';
+    const fallbackMultiaddrs = [
+        '/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+        '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ'
+    ];
+    try {
+        console.log('INFO: Запитую адресу бутстрапа з', bootstrapUrl);
+        const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) throw new Error(`Помилка HTTP: ${response.status}`);
+        const data = await response.json();
+        if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
+            let modifiedAddr = data.multiaddr;
+            if (!isLocalhost && modifiedAddr.includes('ws://')) {
+                modifiedAddr = modifiedAddr.replace('ws://', 'wss://');
+            }
+            if (modifiedAddr.includes('wss//')) {
+                modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
+            }
+            console.log('INFO: Отримано і змінено адресу бутстрапа:', modifiedAddr);
+            return [modifiedAddr, ...fallbackMultiaddrs].filter(addr => addr.includes('/wss') || addr.includes('/tcp'));
+        }
+        throw new Error('Некоректна адреса бутстрапа');
+    } catch (err) {
+        console.error('ERROR: Не вдалося отримати адресу бутстрапа:', err);
+        console.log('INFO: Використовую резервний список бутстрапів:', fallbackMultiaddrs);
+        return fallbackMultiaddrs;
     }
-    throw new Error('Некоректна адреса бутстрапа');
-  } catch (err) {
-    console.error('ERROR: Не вдалося отримати адресу бутстрапа:', err);
-    console.log('INFO: Використовую резервний список бутстрапів:', fallbackMultiaddrs);
-    return fallbackMultiaddrs;
-  }
 }
 
 /**
@@ -545,8 +545,8 @@ async function startNodeInternal() {
                     { urls: 'stun:stun4.l.google.com:19302' },
                     {
                         urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-                        username: process.env.TURN_USERNAME || 'your-turn-username',
-                        credential: process.env.TURN_CREDENTIAL || 'your-turn-password'
+                        username: 'default-turn-username', // Замість process.env
+                        credential: 'default-turn-password' // Замість process.env
                     }
                 ]
             }
@@ -974,7 +974,7 @@ async function republishActiveRedirects() {
     debugLogger(`INFO: Republish cycle finished: ${successCount} successes, ${errorCount} errors`);
 }
 
-function startRepublishing() {
+function startRepPublishing() {
     debugLogger("INFO: Starting republishing interval");
     if (republishIntervalId) {
         clearInterval(republishIntervalId);
