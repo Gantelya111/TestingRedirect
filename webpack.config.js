@@ -22,9 +22,6 @@ export default (env, argv) => {
       path: path.resolve(__dirname, 'public'),
       publicPath: '/',
       clean: true,
-      library: {
-        type: 'module',
-      },
     },
     module: {
       rules: [
@@ -65,7 +62,7 @@ export default (env, argv) => {
         https: 'https-browserify',
         http: 'stream-http',
         vm: 'vm-browserify',
-        process: false, // Відключаємо автоматичний імпорт process
+        process: 'process/browser.js',
         dgram: false,
         net: false,
         tls: false,
@@ -74,22 +71,22 @@ export default (env, argv) => {
       },
       alias: {
         'node:crypto': 'crypto-browserify',
+        'process/browser': 'process/browser.js',
       },
     },
     plugins: [
       new webpack.ProvidePlugin({
-        process: ['process/browser', 'default'], // Використовуємо process/browser
+        process: ['process/browser.js', 'default'],
         Buffer: ['buffer', 'Buffer'],
       }),
       new webpack.IgnorePlugin({
         resourceRegExp: /^(dgram|net|tls|dns|fs)$/,
       }),
       new webpack.DefinePlugin({
-        'process.env.NODE_ENV': JSON.stringify(mode), // Синхронізуємо з mode
-        'process.env.TURN_USERNAME': JSON.stringify('your-turn-username'),
-        'process.env.TURN_CREDENTIAL': JSON.stringify('your-turn-password'),
+        'process.env.NODE_ENV': JSON.stringify(mode),
         'process.env.PORT': JSON.stringify('8080'),
         'process.env.BOOTSTRAP_PORT': JSON.stringify('4003'),
+        'process.browser': JSON.stringify(true),
       }),
       new BundleAnalyzerPlugin({
         analyzerMode: 'static',
@@ -115,8 +112,5 @@ export default (env, argv) => {
       cacheDirectory: path.resolve(__dirname, '.webpack_cache'),
     },
     target: 'web',
-    experiments: {
-      outputModule: true,
-    },
   };
 };
