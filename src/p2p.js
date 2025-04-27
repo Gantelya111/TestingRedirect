@@ -362,7 +362,7 @@ async function fetchBootstrapAddress() {
     '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ'
   ];
   try {
-    debugLogger('INFO: Запитую адресу бутстрапа з %s', bootstrapUrl);
+    console.log('INFO: Запитую адресу бутстрапа з', bootstrapUrl);
     const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`Помилка HTTP: ${response.status}`);
     const data = await response.json();
@@ -374,13 +374,13 @@ async function fetchBootstrapAddress() {
       if (modifiedAddr.includes('wss//')) {
         modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
       }
-      debugLogger('INFO: Отримано і змінено адресу бутстрапа: %s', modifiedAddr);
+      console.log('INFO: Отримано і змінено адресу бутстрапа:', modifiedAddr);
       return [modifiedAddr, ...fallbackMultiaddrs].filter(addr => addr.includes('/wss') || addr.includes('/tcp'));
     }
     throw new Error('Некоректна адреса бутстрапа');
   } catch (err) {
-    debugLogger('ERROR: Не вдалося отримати адресу бутстрапа: %o', err);
-    debugLogger('INFO: Використовую резервний список бутстрапів: %o', fallbackMultiaddrs);
+    console.error('ERROR: Не вдалося отримати адресу бутстрапа:', err);
+    console.log('INFO: Використовую резервний список бутстрапів:', fallbackMultiaddrs);
     return fallbackMultiaddrs;
   }
 }
