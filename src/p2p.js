@@ -109,9 +109,16 @@ async function startNodeInternal() {
     try {
         const peerId = `p2p-redirect-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         
-        // Отримання порту
-        let port = isLocalhost ? 8080 : undefined; // У продакшені порт не потрібен
+        // Налаштування конфігу для PeerJS
+        const peerConfig = {
+            host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
+            path: '/peerjs-server',
+            secure: !isLocalhost
+        };
+
+        // Додаємо порт тільки для локального середовища
         if (isLocalhost) {
+            let port = 8080;
             try {
                 const response = await fetch(`${BASE_URL}/port`, {
                     signal: AbortSignal.timeout(5000)
@@ -124,15 +131,9 @@ async function startNodeInternal() {
             } catch (err) {
                 debugLogger('WARN: Failed to fetch port, falling back to 8080: %o', err);
             }
+            peerConfig.port = port;
         }
 
-        const peerConfig = {
-            host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
-            path: '/peerjs-server',
-            secure: !isLocalhost,
-            port,
-            ws: true
-        };
         debugLogger('INFO: PeerJS config: %o', peerConfig);
 
         peer = new Peer(peerId, peerConfig);
@@ -439,6 +440,16 @@ async function createRedirect(url, description = '') {
     if (!url || typeof url !== 'string' || url.length < 5) {
         debugLogger('ERROR: Invalid URL provided: %s', url);
         throw new Error('Invalid URL provided');
+    }
+
+    // Спроба ініціалізувати PeerJS
+    if (!peer || !peer.open) {
+        debugLogger('WARN: Peer not ready, attempting initialization');
+        try {
+            await startNodeInternal();
+        } catch (err) {
+            debugLogger('WARN: PeerJS initialization failed, proceeding with HTTP: %o', err);
+        }
     }
 
     let shortCode;
