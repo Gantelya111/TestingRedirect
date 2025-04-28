@@ -92,12 +92,30 @@ async function startNodeInternal() {
     updateP2PStatus('Initializing peer...');
     try {
         const peerId = `p2p-redirect-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        
+        // Отримання порту в продакшені
+        let port = isLocalhost ? 8080 : 443;
+        if (!isLocalhost) {
+            try {
+                const response = await fetch('https://libp2p.onrender.com/port', {
+                    signal: AbortSignal.timeout(5000)
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    port = data.port || 443;
+                    debugLogger('INFO: Fetched PeerJS port: %d', port);
+                }
+            } catch (err) {
+                debugLogger('WARN: Failed to fetch port, falling back to 443: %o', err);
+            }
+        }
+
         const peerConfig = {
             host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
-            port: isLocalhost ? 8080 : 443,
-            path: '/peerjs-server', // Змінено шлях для сумісності
+            port,
+            path: '/peerjs-server',
             secure: !isLocalhost,
-            ws: true // Увімкнено WebSocket для Render
+            ws: true
         };
         debugLogger('INFO: PeerJS config: %o', peerConfig);
 
@@ -150,7 +168,6 @@ async function startNodeInternal() {
         throw err;
     }
 }
-
 // Налаштування DataChannel
 function setupConnection(conn) {
     conn.on('open', () => {
