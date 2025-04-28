@@ -614,7 +614,8 @@ async function startNodeInternal() {
             },
             metrics: undefined // Вимкнено метрики
         };
-        debugLogger("INFO: Libp2p config: %o", config);
+        debugLogger("INFO: Libp2p services config: %o", config.services);
+        debugLogger("INFO: Libp2p full config: %o", config);
 
         // Create node
         debugLogger("INFO: Creating Libp2p node...");
@@ -767,7 +768,8 @@ async function startNodeInternal() {
         }
 
         // Start periodic reconnection and synchronization
-        startRepublishing();
+        debugLogger("INFO: Starting periodic republishing and DHT sync");
+        startRepPublishing(); // Виправлено з startRepublishing на startRepPublishing
         startDHTSync();
 
         // Background operations
