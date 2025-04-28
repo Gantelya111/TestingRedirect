@@ -27,18 +27,17 @@ const app = express();
 const server = createServer(app);
 server.setMaxListeners(15);
 
-// Інтеграція PeerServer із http.Server
+// Налаштування PeerServer
 const peerServer = PeerServer({
-    host: HOST,
     path: '/peerjs-server',
-    ssl: isProduction ? {} : undefined,
     proxied: isProduction,
-    server // Передаємо http.Server
+    ssl: isProduction ? {} : undefined,
+    server // Передаємо http.Server для спільного використання
 });
 
 app.use(cors({
     origin: ['https://libp2p.onrender.com', 'http://localhost:8080'],
-    methods: ['GET', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
@@ -72,10 +71,54 @@ app.get('/redirects', (req, res) => {
     res.json(redirects);
 });
 
-app.get('/r/:shortCode', async (req, res) => {
-    const shortCode = req.params.shortCode;
+app.post('/redirects', (req, res) => {
+    const { shortCode, destinationUrl, description } = req.body;
+    if (!shortCode || !destinationUrl) {
+        return res.status(400).json({ error: 'Missing shortCode or destinationUrl' });
+    }
+    const redirect = {
+        shortCode,
+        destinationUrl,
+        description: description || '',
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+    };
+    redirectsCache.set(shortCode, redirect);
+    pruneCacheIfNeeded();
+    debugLogger('INFO: Created redirect: %s', shortCode);
+    res.json({ shortCode });
+});
+
+app.put('/redirects/:shortCode', (req, res) => {
+    const { shortCode } = req.params;
+    const { destinationUrl, description } = req.body;
+    if (!redirectsCache.has(shortCode)) {
+        return res.status(404).json({ error: 'Redirect not found' });
+    }
+    const redirect = redirectsCache.get(shortCode);
+    redirect.destinationUrl = destinationUrl || redirect.destinationUrl;
+    redirect.description = description !== undefined ? description : redirect.description;
+    redirect.updatedAt = Date.now();
+    redirectsCache.set(shortCode, redirect);
+    debugLogger('INFO: Updated redirect: %s', shortCode);
+    res.json({ success: true });
+});
+
+app.delete('/redirects/:shortCode', (req, res) => {
+    const { shortCode } = req.params;
+    if (!redirectsCache.has(shortCode)) {
+        return res.json({ success: true, message: 'Redirect not found' });
+    }
+    redirectsCache.delete(shortCode);
+    debugLogger('INFO: Deleted redirect: %s', shortCode);
+    res.json({ success: true });
+});
+
+app.get('/r/:shortCode', (req, res) => {
+    const { shortCode } = req.params;
     const redirect = redirectsCache.get(shortCode);
     if (redirect) {
+        debugLogger('INFO: Redirecting %s to %s', shortCode, redirect.destinationUrl);
         res.redirect(redirect.destinationUrl);
     } else {
         res.status(404).send('Redirect not found');
@@ -90,6 +133,10 @@ peerServer.on('disconnect', (client) => {
     debugLogger('INFO: Peer disconnected: %s', client.getId());
 });
 
+peerServer.on('error', (err) => {
+    debugLogger('ERROR: PeerServer error: %o', err);
+});
+
 function startServer(port, host) {
     server.removeAllListeners('listening');
     server.removeAllListeners('error');
@@ -97,19 +144,19 @@ function startServer(port, host) {
     server.listen(port, host, () => {
         const actualPort = server.address()?.port || port;
         debugLogger('INFO: Server started on %s:%d', host, actualPort);
-        debugLogger('INFO: PeerJS Server running at %s:%d/peerjs-server', isProduction ? 'libp2p.onrender.com' : 'localhost', actualPort);
+        debugLogger('INFO: PeerJS Server running at %s:%s/peerjs-server', isProduction ? 'libp2p.onrender.com' : 'localhost', isProduction ? '' : `${actualPort}`);
     });
 
     server.on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
             debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
-            setTimeout (() => {
+            setTimeout(() => {
                 server.close();
                 startServer(port, host);
             }, 5000);
         } else {
             debugLogger('ERROR: Server error: %o', err);
-            throw err; // Для дебагу на Render
+            throw err;
         }
     });
 
