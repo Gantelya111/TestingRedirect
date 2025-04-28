@@ -7,19 +7,33 @@ import { logger } from '@libp2p/logger';
 const debugLogger = logger('bootstrap-node');
 
 const isProduction = process.env.NODE_ENV === 'production';
-// Порт із змінної середовища або автоматичний вибір
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 0;
 
-const redirectsCache = new Map(); // Локальний кеш редіректів
+// Обмежений кеш редіректів
+const MAX_CACHE_SIZE = 1000;
+const redirectsCache = new Map();
+
+function pruneCacheIfNeeded() {
+    if (redirectsCache.size > MAX_CACHE_SIZE) {
+        const keys = Array.from(redirectsCache.keys()).slice(0, redirectsCache.size - MAX_CACHE_SIZE);
+        for (const key of keys) {
+            redirectsCache.delete(key);
+        }
+        debugLogger('INFO: Pruned redirectsCache to %d entries', redirectsCache.size);
+    }
+}
 
 const app = express();
 const server = createServer(app);
 
-// Налаштування PeerServer на тому ж порті
+// Збільшуємо ліміт слухачів
+server.setMaxListeners(15);
+
+// Налаштування PeerServer
 const peerServer = PeerServer({
-    port: HTTP_PORT, // Використовуємо той же порт, що й HTTP-сервер
-    path: '/peerjs-server', // Унікальний шлях
-    ssl: isProduction ? {} : undefined, // SSL у продакшені
+    port: HTTP_PORT,
+    path: '/peerjs-server',
+    ssl: isProduction ? {} : undefined,
     proxied: isProduction
 });
 
@@ -36,21 +50,21 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', peerServerRunning: true });
 });
 
-// Ендпоінт для повернення активного порту
+// Ендпоінт для повернення порту
 app.get('/port', (req, res) => {
     const port = server.address()?.port || HTTP_PORT;
     debugLogger('INFO: Returning active port: %d', port);
     res.json({ port });
 });
 
-// Ендпоінт для отримання списку пірів
+// Ендпоінт для списку пірів
 app.get('/peers', (req, res) => {
     const peers = Array.from(peerServer.getClients().keys());
     debugLogger('INFO: Returning peers: %o', peers);
     res.json(peers);
 });
 
-// Ендпоінт для редіректів (HTTP polling)
+// Ендпоінт для редіректів
 app.get('/redirects', (req, res) => {
     const redirects = Array.from(redirectsCache.entries()).map(([shortCode, redirect]) => ({
         shortCode,
@@ -74,7 +88,7 @@ app.get('/r/:shortCode', async (req, res) => {
     }
 });
 
-// Обробка повідомлень від пірів
+// Обробка PeerJS подій
 peerServer.on('connection', (client) => {
     debugLogger('INFO: Peer connected: %s', client.getId());
 });
@@ -83,8 +97,12 @@ peerServer.on('disconnect', (client) => {
     debugLogger('INFO: Peer disconnected: %s', client.getId());
 });
 
-// Запуск сервера з обробкою EADDRINUSE
+// Запуск сервера
 function startServer(port) {
+    // Очищаємо старі слухачі
+    server.removeAllListeners('listening');
+    server.removeAllListeners('error');
+
     server.listen(port, () => {
         const actualPort = server.address()?.port || port;
         debugLogger('INFO: Server started on port %d', actualPort);
@@ -96,7 +114,7 @@ function startServer(port) {
             debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
             setTimeout(() => {
                 server.close();
-                startServer(port || 0); // Спробувати інший порт, якщо не задано
+                startServer(port || 0);
             }, 5000);
         } else {
             debugLogger('ERROR: Server error: %o', err);
