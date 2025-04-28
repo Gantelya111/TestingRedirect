@@ -157,7 +157,7 @@ async function validateMultiaddr(addr) {
         return false;
     }
 }
-}
+
 
 /**
  * Fetch and validate bootstrap node addresses
