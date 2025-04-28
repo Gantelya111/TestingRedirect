@@ -545,8 +545,8 @@ async function startNodeInternal() {
                     { urls: 'stun:stun4.l.google.com:19302' },
                     {
                         urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-                        username: 'default-turn-username', // Замість process.env
-                        credential: 'default-turn-password' // Замість process.env
+                        username: 'default-turn-username',
+                        credential: 'default-turn-password'
                     }
                 ]
             }
@@ -554,61 +554,66 @@ async function startNodeInternal() {
         debugLogger('INFO: WebRTC configuration: %o', webrtcConfig);
 
         // Libp2p configuration
+        const services = {
+            dht: kadDHT({
+                clientMode: isBrowser,
+                protocol: '/p2p-redirect/kad/1.0.0',
+                enabled: isCryptoAvailable
+            }),
+            pubsub: gossipsub({
+                allowPublishToZeroPeers: true,
+                emitSelf: false,
+                messageCache: true,
+                scoreThresholds: {
+                    gossipThreshold: -10,
+                    publishThreshold: -50,
+                    graylistThreshold: -100
+                }
+            }),
+            identify: identify(),
+            ping: ping()
+        };
+        // Додаємо relay тільки для небраузерного оточення
+        if (!isBrowser) {
+            services.relay = circuitRelayServer({
+                advertise: true
+            });
+        }
+
         const config = {
-    addresses: {
-        listen: isBrowser ? [] : ['/ip4/0.0.0.0/tcp/4001', '/ip4/0.0.0.0/tcp/4002/wss']
-    },
-    transports: [
-        webSockets({ filter: wsFilter }),
-        webRTC(webrtcConfig),
-        circuitRelayTransport({
-            discoverRelays: 2,
-            reservationConcurrency: 3
-        })
-    ],
-    streamMuxers: [mplex()],
-    connectionEncryption: [noise()],
-    peerDiscovery: [
-        bootstrap({
-            list: bootstrapMultiaddrs,
-            interval: 5000,
-            enabled: true
-        }),
-        ...(mdnsDiscovery ? [mdnsDiscovery({
-            interval: 10000,
-            enabled: true
-        })] : [])
-    ],
-    services: {
-        dht: kadDHT({
-            clientMode: isBrowser,
-            protocol: '/p2p-redirect/kad/1.0.0',
-            enabled: isCryptoAvailable
-        }),
-        pubsub: gossipsub({
-            allowPublishToZeroPeers: true,
-            emitSelf: false,
-            messageCache: true,
-            scoreThresholds: {
-                gossipThreshold: -10,
-                publishThreshold: -50,
-                graylistThreshold: -100
-            }
-        }),
-        identify: identify(),
-        ping: ping(),
-        relay: !isBrowser ? circuitRelayServer({
-            advertise: true
-        }) : undefined
-    },
-    connectionManager: {
-        minConnections: 1,
-        maxConnections: 100,
-        autoDial: true,
-        dialTimeout: 10000
-    },
-    metrics: undefined // Вимкнути метрики
-};
+            addresses: {
+                listen: isBrowser ? [] : ['/ip4/0.0.0.0/tcp/4001', '/ip4/0.0.0.0/tcp/4002/wss']
+            },
+            transports: [
+                webSockets({ filter: wsFilter }),
+                webRTC(webrtcConfig),
+                circuitRelayTransport({
+                    discoverRelays: 2,
+                    reservationConcurrency: 3
+                })
+            ],
+            streamMuxers: [mplex()],
+            connectionEncryption: [noise()],
+            peerDiscovery: [
+                bootstrap({
+                    list: bootstrapMultiaddrs,
+                    interval: 5000,
+                    enabled: true
+                }),
+                ...(mdnsDiscovery ? [mdnsDiscovery({
+                    interval: 10000,
+                    enabled: true
+                })] : [])
+            ],
+            services,
+            connectionManager: {
+                minConnections: 1,
+                maxConnections: 100,
+                autoDial: true,
+                dialTimeout: 10000
+            },
+            metrics: undefined // Вимкнено метрики
+        };
         debugLogger("INFO: Libp2p config: %o", config);
 
         // Create node
