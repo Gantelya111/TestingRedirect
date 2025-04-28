@@ -27,16 +27,14 @@ const app = express();
 const server = createServer(app);
 server.setMaxListeners(15);
 
+// Інтеграція PeerServer із http.Server
 const peerServer = PeerServer({
-    port: isProduction ? 0 : HTTP_PORT, // У продакшені порт для PeerServer не потрібен, бо він використовує той самий server
     host: HOST,
     path: '/peerjs-server',
     ssl: isProduction ? {} : undefined,
-    proxied: isProduction
+    proxied: isProduction,
+    server // Передаємо http.Server
 });
-
-// Прив’язуємо PeerServer до того ж HTTP-сервера
-peerServer.listen(server);
 
 app.use(cors({
     origin: ['https://libp2p.onrender.com', 'http://localhost:8080'],
@@ -105,7 +103,7 @@ function startServer(port, host) {
     server.on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
             debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
-            setTimeout(() => {
+            setTimeout (() => {
                 server.close();
                 startServer(port, host);
             }, 5000);
