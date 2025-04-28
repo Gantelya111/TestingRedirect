@@ -13,7 +13,6 @@ import { fromString as uint8ArrayFromString, toString as uint8ArrayToString } fr
 import { multiaddr } from '@multiformats/multiaddr';
 import { logger } from '@libp2p/logger';
 import { createHash } from 'crypto';
-import { prometheusMetrics } from '@libp2p/prometheus-metrics';
 
 // Local logger
 const debugLogger = logger('p2p-app');
@@ -556,60 +555,60 @@ async function startNodeInternal() {
 
         // Libp2p configuration
         const config = {
-            addresses: {
-                listen: isBrowser ? [] : ['/ip4/0.0.0.0/tcp/4001', '/ip4/0.0.0.0/tcp/4002/wss']
-            },
-            transports: [
-                webSockets({ filter: wsFilter }),
-                webRTC(webrtcConfig),
-                circuitRelayTransport({
-                    discoverRelays: 2,
-                    reservationConcurrency: 3
-                })
-            ],
-            streamMuxers: [mplex()],
-            connectionEncryption: [noise()],
-            peerDiscovery: [
-                bootstrap({
-                    list: bootstrapMultiaddrs,
-                    interval: 5000,
-                    enabled: true
-                }),
-                ...(mdnsDiscovery ? [mdnsDiscovery({
-                    interval: 10000,
-                    enabled: true
-                })] : [])
-            ],
-            services: {
-                dht: kadDHT({
-                    clientMode: isBrowser,
-                    protocol: '/p2p-redirect/kad/1.0.0',
-                    enabled: isCryptoAvailable
-                }),
-                pubsub: gossipsub({
-                    allowPublishToZeroPeers: true,
-                    emitSelf: false,
-                    messageCache: true,
-                    scoreThresholds: {
-                        gossipThreshold: -10,
-                        publishThreshold: -50,
-                        graylistThreshold: -100
-                    }
-                }),
-                identify: identify(),
-                ping: ping(),
-                relay: !isBrowser ? circuitRelayServer({
-                    advertise: true
-                }) : undefined
-            },
-            connectionManager: {
-                minConnections: 1,
-                maxConnections: 100,
-                autoDial: true,
-                dialTimeout: 10000
-            },
-            metrics: undefined // Вимкнено метрики для обходу помилки
-        };
+    addresses: {
+        listen: isBrowser ? [] : ['/ip4/0.0.0.0/tcp/4001', '/ip4/0.0.0.0/tcp/4002/wss']
+    },
+    transports: [
+        webSockets({ filter: wsFilter }),
+        webRTC(webrtcConfig),
+        circuitRelayTransport({
+            discoverRelays: 2,
+            reservationConcurrency: 3
+        })
+    ],
+    streamMuxers: [mplex()],
+    connectionEncryption: [noise()],
+    peerDiscovery: [
+        bootstrap({
+            list: bootstrapMultiaddrs,
+            interval: 5000,
+            enabled: true
+        }),
+        ...(mdnsDiscovery ? [mdnsDiscovery({
+            interval: 10000,
+            enabled: true
+        })] : [])
+    ],
+    services: {
+        dht: kadDHT({
+            clientMode: isBrowser,
+            protocol: '/p2p-redirect/kad/1.0.0',
+            enabled: isCryptoAvailable
+        }),
+        pubsub: gossipsub({
+            allowPublishToZeroPeers: true,
+            emitSelf: false,
+            messageCache: true,
+            scoreThresholds: {
+                gossipThreshold: -10,
+                publishThreshold: -50,
+                graylistThreshold: -100
+            }
+        }),
+        identify: identify(),
+        ping: ping(),
+        relay: !isBrowser ? circuitRelayServer({
+            advertise: true
+        }) : undefined
+    },
+    connectionManager: {
+        minConnections: 1,
+        maxConnections: 100,
+        autoDial: true,
+        dialTimeout: 10000
+    },
+    metrics: undefined // Вимкнути метрики
+};
         debugLogger("INFO: Libp2p config: %o", config);
 
         // Create node
@@ -798,6 +797,7 @@ async function startNodeInternal() {
         throw error;
     }
 }
+
 /**
  * Start HTTP polling as a fallback mechanism
  */
