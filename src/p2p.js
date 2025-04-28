@@ -122,12 +122,7 @@ async function validateMultiaddr(addr) {
         }
         // Test WebSocket connection
         if (addr.includes('/wss')) {
-            let wsAddr = addr.split('/p2p/')[0].replace('/dns4/', 'wss://').replace('/tcp/', ':');
-            // Try port 443 if 4002 is specified
-            if (wsAddr.includes(':4002')) {
-                wsAddr = wsAddr.replace(':4002', ':443');
-                debugLogger('INFO: Adjusted WebSocket address to port 443: %s', wsAddr);
-            }
+            const wsAddr = addr.split('/p2p/')[0].replace('/dns4/', 'wss://').replace('/tcp/', ':');
             debugLogger('INFO: Testing WebSocket connection to %s', wsAddr);
             return new Promise((resolve) => {
                 const ws = new WebSocket(wsAddr);
@@ -163,10 +158,6 @@ async function validateMultiaddr(addr) {
  * Fetch and validate bootstrap node addresses
  * @returns {Promise<string[]>}
  */
-/**
- * Fetch and validate bootstrap node addresses
- * @returns {Promise<string[]>}
- */
 async function fetchBootstrapAddress() {
     const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     const bootstrapUrl = isLocalhost
@@ -176,7 +167,8 @@ async function fetchBootstrapAddress() {
         '/dns4/bootstrap.libp2p.io/tcp/443/wss/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
         '/dns4/bootstrap.libp2p.io/tcp/443/wss/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
         '/dns4/node0.preprod.protocol.ai/tcp/443/wss/p2p/12D3KooWSqV7Bj4SYuACMk3v3kq9X1P8dV5E2KGLYhDLrUrn7N2z',
-        '/dns4/node1.preprod.protocol.ai/tcp/443/wss/p2p/12D3KooWAE8ozW5rWug2kA4oqV3jNq22vBs3Mpz7Xj8mYUt6f4mV'
+        '/dns4/node1.preprod.protocol.ai/tcp/443/wss/p2p/12D3KooWAE8ozW5rWug2kA4oqV3jNq22vBs3Mpz7Xj8mYUt6f4mV',
+        '/dns4/bootstrap-0.ipfs.io/tcp/443/wss/p2p/12D3KooWKRyzVWW6ChFjLbAZkRP1NGAzRB3W7yUaWvNKrZ4NZ6u7'
     ];
     const primaryBootstrap = '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWRVv9r3A2hGRPiUUEedXUitDwBXN8BLa9BZBKrUfYtaRy';
     let validMultiaddrs = [];
@@ -501,8 +493,11 @@ async function syncRedirectsViaPolling() {
         return;
     }
     try {
-        debugLogger('INFO: Starting HTTP polling to https://libp2p.onrender.com/redirects');
-        const response = await fetch('https://libp2p.onrender.com/redirects', { signal: AbortSignal.timeout(5000) });
+        const pollingUrl = isLocalhost
+            ? 'http://localhost:8080/redirects'
+            : 'https://libp2p.onrender.com/redirects';
+        debugLogger('INFO: Starting HTTP polling to %s', pollingUrl);
+        const response = await fetch(pollingUrl, { signal: AbortSignal.timeout(5000) });
         debugLogger('INFO: Polling response status: %d, headers: %o', response.status, Object.fromEntries(response.headers));
         if (!response.ok) {
             throw new Error(`HTTP error: ${response.status}`);
@@ -510,7 +505,7 @@ async function syncRedirectsViaPolling() {
         const redirects = await response.json();
         debugLogger('INFO: Polling fetched redirects: %o', redirects);
         if (!Array.isArray(redirects) || redirects.length === 0) {
-            debugLogger('WARN: No redirects received from polling');
+            debugLogger('WARN: No redirects received from polling at %s', pollingUrl);
             updateP2PStatus('No redirects available via polling', true);
             return;
         }
