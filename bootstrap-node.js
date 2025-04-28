@@ -32,7 +32,7 @@ const peerServer = PeerServer({
     path: '/peerjs-server',
     proxied: isProduction,
     ssl: isProduction ? {} : undefined,
-    server // Передаємо http.Server для спільного використання
+    server
 });
 
 app.use(cors({
@@ -54,9 +54,15 @@ app.get('/port', (req, res) => {
 });
 
 app.get('/peers', (req, res) => {
-    const peers = Array.from(peerServer.getClients().keys());
-    debugLogger('INFO: Returning peers: %o', peers);
-    res.json(peers);
+    try {
+        const clients = peerServer.getClients ? peerServer.getClients() : new Map();
+        const peers = Array.from(clients.keys());
+        debugLogger('INFO: Returning peers: %o', peers);
+        res.json(peers);
+    } catch (err) {
+        debugLogger('ERROR: Failed to get peers: %o', err);
+        res.status(500).json({ error: 'Failed to get peers' });
+    }
 });
 
 app.get('/redirects', (req, res) => {
@@ -72,7 +78,7 @@ app.get('/redirects', (req, res) => {
 });
 
 app.post('/redirects', (req, res) => {
-    const { shortCode, destinationUrl, description } = req.body;
+    const { shortCode, destinationUrl, description, passwordHash } = req.body;
     if (!shortCode || !destinationUrl) {
         return res.status(400).json({ error: 'Missing shortCode or destinationUrl' });
     }
@@ -80,6 +86,7 @@ app.post('/redirects', (req, res) => {
         shortCode,
         destinationUrl,
         description: description || '',
+        passwordHash: passwordHash || '',
         createdAt: Date.now(),
         updatedAt: Date.now()
     };
