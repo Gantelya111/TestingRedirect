@@ -18,16 +18,30 @@ if (!isHttps && !isLocalhost) {
     debugLogger('WARN: Running on HTTP (not localhost). WebRTC may require HTTPS.');
 }
 
-let peer;
+let peer = null;
 const redirectsCache = new Map();
+const connections = new Map();
 const topic = 'redirects-changes-v3';
 const REPUBLISH_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_SHORTCODE_GENERATION_ATTEMPTS = 15;
 const KEY_PREFIX = '/redirect-p2p/entry/';
+const MAX_CACHE_SIZE = 1000;
+const MAX_CONNECTIONS = 50;
 let republishIntervalId = null;
 let pollingIntervalId = null;
 let syncIntervalId = null;
-const connections = new Map(); // Зберігаємо DataChannel для кожного піра
+
+// Обмеження кешу
+function pruneCacheIfNeeded() {
+    if (redirectsCache.size > MAX_CACHE_SIZE) {
+        const keys = Array.from(redirectsCache.keys()).slice(0, redirectsCache.size - MAX_CACHE_SIZE);
+        for (const key of keys) {
+            redirectsCache.delete(key);
+        }
+        debugLogger('INFO: Pruned redirectsCache to %d entries', redirectsCache.size);
+        saveRedirectsCacheToLocalStorage();
+    }
+}
 
 // Збереження кешу в localStorage
 function saveRedirectsCacheToLocalStorage() {
@@ -54,6 +68,7 @@ function loadRedirectsCacheFromLocalStorage() {
                     redirectsCache.set(key, cacheObject[key]);
                 }
             }
+            pruneCacheIfNeeded();
             debugLogger('INFO: Loaded redirectsCache from localStorage: %o', cacheObject);
         } else {
             debugLogger('INFO: No redirectsCache found in localStorage');
@@ -142,7 +157,7 @@ async function startNodeInternal() {
         // Підключення до відомих пірів
         const knownPeers = await fetchKnownPeers();
         for (const peerId of knownPeers) {
-            if (peerId !== peer.id) {
+            if (peerId !== peer.id && connections.size < MAX_CONNECTIONS) {
                 try {
                     const conn = peer.connect(peerId);
                     setupConnection(conn);
@@ -164,18 +179,28 @@ async function startNodeInternal() {
         debugLogger('ERROR: Node initialization failed: %o', err);
         updateP2PStatus(`Failed to start: ${err.message}`, true);
         peer = null;
+        connections.clear();
+        redirectsCache.clear();
+        localStorage.removeItem('redirectsCache');
         startPolling();
         throw err;
     }
 }
+
 // Налаштування DataChannel
 function setupConnection(conn) {
+    if (connections.size >= MAX_CONNECTIONS) {
+        debugLogger('WARN: Max connections reached, rejecting new connection from %s', conn.peer);
+        conn.close();
+        return;
+    }
+
+    connections.set(conn.peer, conn);
     conn.on('open', () => {
         debugLogger('INFO: DataChannel opened with peer: %s', conn.peer);
-        connections.set(conn.peer, conn);
         updateP2PStatus(`Connected to peer: ${conn.peer.substring(0, 10)}...`);
 
-        // Надсилаємо всі локальні редіректи новому піру
+        // Надсилаємо всі локальні редиректи новому піру
         for (const [shortCode, redirect] of redirectsCache) {
             const safeRedirect = {
                 destinationUrl: redirect.destinationUrl,
@@ -184,7 +209,11 @@ function setupConnection(conn) {
                 updatedAt: redirect.updatedAt
             };
             const message = { action: 'create', shortCode, redirect: safeRedirect };
-            conn.send(JSON.stringify(message));
+            try {
+                conn.send(JSON.stringify(message));
+            } catch (err) {
+                debugLogger('ERROR: Failed to send initial redirect to %s: %o', conn.peer, err);
+            }
         }
     });
 
@@ -206,6 +235,7 @@ function setupConnection(conn) {
 
     conn.on('error', (err) => {
         debugLogger('ERROR: DataChannel error with peer %s: %o', conn.peer, err);
+        connections.delete(conn.peer);
     });
 }
 
@@ -231,6 +261,7 @@ function handleMessage(message) {
                         shortCode,
                         passwordHash: current.passwordHash || redirect.passwordHash
                     });
+                    pruneCacheIfNeeded();
                     saveRedirectsCacheToLocalStorage();
                     debugLogger('INFO: Cached %s: %s', action, shortCode);
                 }
@@ -255,7 +286,11 @@ function handleMessage(message) {
                 const response = { action: 'get_response', shortCode, redirect: safeRedirect };
                 const conn = connections.get(message.from);
                 if (conn) {
-                    conn.send(JSON.stringify(response));
+                    try {
+                        conn.send(JSON.stringify(response));
+                    } catch (err) {
+                        debugLogger('ERROR: Failed to send get_response to %s: %o', message.from, err);
+                    }
                 }
             }
             break;
@@ -266,6 +301,7 @@ function handleMessage(message) {
                     shortCode,
                     passwordHash: redirectsCache.get(shortCode)?.passwordHash
                 });
+                pruneCacheIfNeeded();
                 saveRedirectsCacheToLocalStorage();
                 debugLogger('INFO: Received redirect %s from peer', shortCode);
             }
@@ -310,6 +346,7 @@ async function syncRedirectsViaPolling() {
         redirects.forEach(r => {
             if (r.shortCode && r.destinationUrl) {
                 redirectsCache.set(r.shortCode, r);
+                pruneCacheIfNeeded();
                 debugLogger('INFO: Added redirect to cache: %s', r.shortCode);
             }
         });
@@ -442,6 +479,7 @@ async function createRedirect(url, description = '') {
     };
 
     redirectsCache.set(shortCode, redirect);
+    pruneCacheIfNeeded();
     saveRedirectsCacheToLocalStorage();
 
     const safeRedirect = {
@@ -477,7 +515,7 @@ async function getRedirect(shortCode) {
     const message = { action: 'get', shortCode, from: peer.id };
     broadcastMessage(message);
 
-    // Чекаємо відповідь (з таймаутом 5 секунд)
+    // Чекаємо відповідь із таймаутом
     return new Promise((resolve) => {
         const timeout = setTimeout(() => {
             debugLogger(`WARN: getRedirect: No response for ${shortCode}`);
@@ -485,20 +523,23 @@ async function getRedirect(shortCode) {
             resolve(null);
         }, 5000);
 
-        const handler = (msg) => {
-            if (msg.action === 'get_response' && msg.shortCode === shortCode) {
-                clearTimeout(timeout);
-                resolve(redirectsCache.get(shortCode));
+        // Використовуємо єдиний слухач для всіх з’єднань
+        const handler = (data) => {
+            try {
+                const msg = JSON.parse(data);
+                if (msg.action === 'get_response' && msg.shortCode === shortCode) {
+                    clearTimeout(timeout);
+                    resolve(redirectsCache.get(shortCode));
+                }
+            } catch (err) {
+                debugLogger('ERROR: Failed to parse get_response data: %o', err);
             }
         };
 
+        // Додаємо слухача до всіх з’єднань один раз
         for (const [, conn] of connections) {
-            conn.on('data', (data) => {
-                try {
-                    const msg = JSON.parse(data);
-                    handler(msg);
-                } catch (err) {}
-            });
+            conn.removeAllListeners('data'); // Видаляємо старі слухачі
+            conn.on('data', handler);
         }
     });
 }
@@ -536,6 +577,7 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
     };
 
     redirectsCache.set(shortCode, updatedRedirect);
+    pruneCacheIfNeeded();
     saveRedirectsCacheToLocalStorage();
 
     const safeRedirect = {
@@ -698,7 +740,7 @@ window.testP2P = {
     discoverPeers: async () => {
         const peers = await fetchKnownPeers();
         for (const peerId of peers) {
-            if (peerId !== peer.id && !connections.has(peerId)) {
+            if (peerId !== peer.id && !connections.has(peerId) && connections.size < MAX_CONNECTIONS) {
                 try {
                     const conn = peer.connect(peerId);
                     setupConnection(conn);
