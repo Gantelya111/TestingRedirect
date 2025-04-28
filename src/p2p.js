@@ -11,6 +11,7 @@ const isSecureContext = isBrowser && window.isSecureContext;
 const isCryptoAvailable = typeof globalThis.crypto !== 'undefined' && globalThis.crypto.subtle && typeof globalThis.crypto.subtle.digest === 'function';
 const isLocalhost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const isHttps = isBrowser && window.location.protocol === 'https:';
+const BASE_URL = isLocalhost ? 'http://localhost:8080' : 'https://libp2p.onrender.com';
 debugLogger('INFO: Environment check - Browser: %o, SecureContext: %o, CryptoAvailable: %o, Localhost: %o, HTTPS: %o',
     isBrowser, isSecureContext, isCryptoAvailable, isLocalhost, isHttps);
 
@@ -108,28 +109,28 @@ async function startNodeInternal() {
     try {
         const peerId = `p2p-redirect-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         
-        // Отримання порту в продакшені
-        let port = isLocalhost ? 8080 : 443;
-        if (!isLocalhost) {
+        // Отримання порту
+        let port = isLocalhost ? 8080 : undefined; // У продакшені порт не потрібен
+        if (isLocalhost) {
             try {
-                const response = await fetch('https://libp2p.onrender.com/port', {
+                const response = await fetch(`${BASE_URL}/port`, {
                     signal: AbortSignal.timeout(5000)
                 });
                 if (response.ok) {
                     const data = await response.json();
-                    port = data.port || 443;
+                    port = data.port || 8080;
                     debugLogger('INFO: Fetched PeerJS port: %d', port);
                 }
             } catch (err) {
-                debugLogger('WARN: Failed to fetch port, falling back to 443: %o', err);
+                debugLogger('WARN: Failed to fetch port, falling back to 8080: %o', err);
             }
         }
 
         const peerConfig = {
             host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
-            port,
             path: '/peerjs-server',
             secure: !isLocalhost,
+            port,
             ws: true
         };
         debugLogger('INFO: PeerJS config: %o', peerConfig);
@@ -312,7 +313,7 @@ function handleMessage(message) {
 // Отримання списку відомих пірів
 async function fetchKnownPeers() {
     try {
-        const url = isLocalhost ? 'http://localhost:8080/peers' : 'https://libp2p.onrender.com/peers';
+        const url = `${BASE_URL}/peers`;
         const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
         const peers = await response.json();
@@ -331,7 +332,7 @@ async function syncRedirectsViaPolling() {
         return;
     }
     try {
-        const pollingUrl = isLocalhost ? 'http://localhost:8080/redirects' : 'https://libp2p.onrender.com/redirects';
+        const pollingUrl = `${BASE_URL}/redirects`;
         debugLogger('INFO: Starting HTTP polling to %s', pollingUrl);
         const response = await fetch(pollingUrl, { signal: AbortSignal.timeout(5000) });
         debugLogger('INFO: Polling response status: %d, headers: %o', response.status, Object.fromEntries(response.headers));
@@ -435,10 +436,6 @@ function republishActiveRedirects() {
 // CRUD-операції
 async function createRedirect(url, description = '') {
     debugLogger('INFO: createRedirect called with: %o', { url, description });
-    if (!peer || !peer.open) {
-        debugLogger('WARN: Peer not ready, waiting for initialization');
-        await startNodeInternal();
-    }
     if (!url || typeof url !== 'string' || url.length < 5) {
         debugLogger('ERROR: Invalid URL provided: %s', url);
         throw new Error('Invalid URL provided');
@@ -457,7 +454,7 @@ async function createRedirect(url, description = '') {
             debugLogger(`WARN: Local cache collision for shortCode ${shortCode}`);
             continue;
         }
-        success = true; // PeerJS не має DHT, тому перевіряємо лише локальний кеш
+        success = true;
     }
 
     if (!success) {
@@ -478,18 +475,38 @@ async function createRedirect(url, description = '') {
         updatedAt: Date.now()
     };
 
-    redirectsCache.set(shortCode, redirect);
-    pruneCacheIfNeeded();
-    saveRedirectsCacheToLocalStorage();
+    // Спроба створити через HTTP
+    try {
+        const response = await fetch(`${BASE_URL}/redirects`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(redirect)
+        });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        redirectsCache.set(shortCode, redirect);
+        pruneCacheIfNeeded();
+        saveRedirectsCacheToLocalStorage();
+        debugLogger('INFO: Created redirect via HTTP: %s', shortCode);
+    } catch (err) {
+        debugLogger('ERROR: Failed to create redirect via HTTP: %o', err);
+    }
 
-    const safeRedirect = {
-        destinationUrl: redirect.destinationUrl,
-        description: redirect.description,
-        createdAt: redirect.createdAt,
-        updatedAt: redirect.updatedAt
-    };
-    const message = { action: 'create', shortCode, redirect: safeRedirect };
-    broadcastMessage(message);
+    // P2P-синхронізація, якщо PeerJS готовий
+    if (peer && peer.open) {
+        redirectsCache.set(shortCode, redirect);
+        pruneCacheIfNeeded();
+        saveRedirectsCacheToLocalStorage();
+        const safeRedirect = {
+            destinationUrl: redirect.destinationUrl,
+            description: redirect.description,
+            createdAt: redirect.createdAt,
+            updatedAt: redirect.updatedAt
+        };
+        const message = { action: 'create', shortCode, redirect: safeRedirect };
+        broadcastMessage(message);
+    } else {
+        debugLogger('WARN: PeerJS not ready, relying on HTTP');
+    }
 
     updateP2PStatus('Redirect created successfully');
     return { shortCode, password };
@@ -501,9 +518,6 @@ async function getRedirect(shortCode) {
         debugLogger('WARN: getRedirect: Empty shortCode provided');
         return null;
     }
-    if (!peer || !peer.open) {
-        await startNodeInternal();
-    }
 
     if (redirectsCache.has(shortCode)) {
         debugLogger(`INFO: getRedirect: Found ${shortCode} in cache`);
@@ -511,44 +525,61 @@ async function getRedirect(shortCode) {
         return redirectsCache.get(shortCode);
     }
 
-    updateP2PStatus(`Querying network for ${shortCode}...`);
-    const message = { action: 'get', shortCode, from: peer.id };
-    broadcastMessage(message);
-
-    // Чекаємо відповідь із таймаутом
-    return new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-            debugLogger(`WARN: getRedirect: No response for ${shortCode}`);
-            updateP2PStatus(`Redirect ${shortCode} not found`, true);
-            resolve(null);
-        }, 5000);
-
-        // Використовуємо єдиний слухач для всіх з’єднань
-        const handler = (data) => {
-            try {
-                const msg = JSON.parse(data);
-                if (msg.action === 'get_response' && msg.shortCode === shortCode) {
-                    clearTimeout(timeout);
-                    resolve(redirectsCache.get(shortCode));
-                }
-            } catch (err) {
-                debugLogger('ERROR: Failed to parse get_response data: %o', err);
-            }
-        };
-
-        // Додаємо слухача до всіх з’єднань один раз
-        for (const [, conn] of connections) {
-            conn.removeAllListeners('data'); // Видаляємо старі слухачі
-            conn.on('data', handler);
+    // HTTP-запит
+    try {
+        const response = await fetch(`${BASE_URL}/redirects`, { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const redirects = await response.json();
+        const redirect = redirects.find(r => r.shortCode === shortCode);
+        if (redirect) {
+            redirectsCache.set(shortCode, redirect);
+            pruneCacheIfNeeded();
+            saveRedirectsCacheToLocalStorage();
+            updateP2PStatus(`Redirect ${shortCode} found via server`);
+            return redirect;
         }
-    });
+    } catch (err) {
+        debugLogger('ERROR: Failed to get redirect via HTTP: %o', err);
+    }
+
+    // P2P-запит
+    if (peer && peer.open) {
+        updateP2PStatus(`Querying network for ${shortCode}...`);
+        const message = { action: 'get', shortCode, from: peer.id };
+        broadcastMessage(message);
+
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                debugLogger(`WARN: getRedirect: No response for ${shortCode}`);
+                updateP2PStatus(`Redirect ${shortCode} not found`, true);
+                resolve(null);
+            }, 5000);
+
+            const handler = (data) => {
+                try {
+                    const msg = JSON.parse(data);
+                    if (msg.action === 'get_response' && msg.shortCode === shortCode) {
+                        clearTimeout(timeout);
+                        resolve(redirectsCache.get(shortCode));
+                    }
+                } catch (err) {
+                    debugLogger('ERROR: Failed to parse get_response data: %o', err);
+                }
+            };
+
+            for (const [, conn] of connections) {
+                conn.removeAllListeners('data');
+                conn.on('data', handler);
+            }
+        });
+    }
+
+    updateP2PStatus(`Redirect ${shortCode} not found`, true);
+    return null;
 }
 
 async function updateRedirect(shortCode, newUrl, newDescription, redirectPassword) {
     debugLogger('INFO: updateRedirect called with: %o', { shortCode, newUrl, newDescription });
-    if (!peer || !peer.open) {
-        await startNodeInternal();
-    }
     if (!newUrl || typeof newUrl !== 'string' || newUrl.length < 5) {
         debugLogger('ERROR: Invalid new URL: %s', newUrl);
         throw new Error('Invalid new URL provided');
@@ -576,17 +607,35 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
         updatedAt: Date.now()
     };
 
-    redirectsCache.set(shortCode, updatedRedirect);
-    pruneCacheIfNeeded();
-    saveRedirectsCacheToLocalStorage();
+    // HTTP-запит
+    try {
+        const response = await fetch(`${BASE_URL}/redirects/${shortCode}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ destinationUrl: newUrl, description: newDescription })
+        });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        redirectsCache.set(shortCode, updatedRedirect);
+        pruneCacheIfNeeded();
+        saveRedirectsCacheToLocalStorage();
+        debugLogger('INFO: Updated redirect via HTTP: %s', shortCode);
+    } catch (err) {
+        debugLogger('ERROR: Failed to update redirect via HTTP: %o', err);
+    }
 
-    const safeRedirect = {
-        destinationUrl: updatedRedirect.destinationUrl,
-        description: updatedRedirect.description,
-        updatedAt: updatedRedirect.updatedAt
-    };
-    const message = { action: 'update', shortCode, redirect: safeRedirect };
-    broadcastMessage(message);
+    // P2P-синхронізація
+    if (peer && peer.open) {
+        redirectsCache.set(shortCode, updatedRedirect);
+        pruneCacheIfNeeded();
+        saveRedirectsCacheToLocalStorage();
+        const safeRedirect = {
+            destinationUrl: updatedRedirect.destinationUrl,
+            description: updatedRedirect.description,
+            updatedAt: updatedRedirect.updatedAt
+        };
+        const message = { action: 'update', shortCode, redirect: safeRedirect };
+        broadcastMessage(message);
+    }
 
     updateP2PStatus(`Redirect ${shortCode} updated successfully`);
     return { success: true };
@@ -594,10 +643,6 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
 
 async function deleteRedirect(shortCode, redirectPassword) {
     debugLogger('INFO: deleteRedirect called with: %o', { shortCode });
-    if (!peer || !peer.open) {
-        await startNodeInternal();
-    }
-
     updateP2PStatus(`Attempting to delete ${shortCode}...`);
     const stored = redirectsCache.get(shortCode) || await getRedirect(shortCode);
     if (!stored) {
@@ -613,11 +658,24 @@ async function deleteRedirect(shortCode, redirectPassword) {
         throw new Error('Incorrect redirect password');
     }
 
-    redirectsCache.delete(shortCode);
-    saveRedirectsCacheToLocalStorage();
+    // HTTP-запит
+    try {
+        const response = await fetch(`${BASE_URL}/redirects/${shortCode}`, { method: 'DELETE' });
+        if (!response.ok && response.status !== 404) throw new Error(`HTTP error: ${response.status}`);
+        redirectsCache.delete(shortCode);
+        saveRedirectsCacheToLocalStorage();
+        debugLogger('INFO: Deleted redirect via HTTP: %s', shortCode);
+    } catch (err) {
+        debugLogger('ERROR: Failed to delete redirect via HTTP: %o', err);
+    }
 
-    const message = { action: 'delete', shortCode };
-    broadcastMessage(message);
+    // P2P-синхронізація
+    if (peer && peer.open) {
+        redirectsCache.delete(shortCode);
+        saveRedirectsCacheToLocalStorage();
+        const message = { action: 'delete', shortCode };
+        broadcastMessage(message);
+    }
 
     updateP2PStatus(`Redirect ${shortCode} deleted successfully`);
     return { success: true };
