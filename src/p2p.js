@@ -95,8 +95,9 @@ async function startNodeInternal() {
         const peerConfig = {
             host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
             port: isLocalhost ? 8080 : 443,
-            path: '/peerjs',
-            secure: !isLocalhost
+            path: '/peerjs-server', // Змінено шлях для сумісності
+            secure: !isLocalhost,
+            ws: true // Увімкнено WebSocket для Render
         };
         debugLogger('INFO: PeerJS config: %o', peerConfig);
 
