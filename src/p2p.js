@@ -4,7 +4,7 @@ import { webRTC } from '@libp2p/webrtc';
 import { mplex } from '@libp2p/mplex';
 import { noise } from '@chainsafe/libp2p-noise';
 import { kadDHT } from '@libp2p/kad-dht';
-import { gossipsub } from '@chainsafe/libp2p-gossipsub';
+import { gossipsub } from '@chainsafe/libp2p-gossipsub'// Оновлено з @chainsafe/libp2p-gossipsub
 import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
 import { bootstrap } from '@libp2p/bootstrap';
@@ -35,8 +35,8 @@ let node;
 const redirectsCache = new Map();
 const topic = 'redirects-changes-v3';
 const REPUBLISH_INTERVAL_MS = 10 * 60 * 1000;
-const DHT_PUT_OPTIONS = { timeout: 10000 };
-const DHT_GET_OPTIONS = { timeout: 5000 };
+const DHT_PUT_OPTIONS = { timeout: 15000 }; // Збільшено таймаут
+const DHT_GET_OPTIONS = { timeout: 10000 }; // Збільшено таймаут
 const MAX_SHORTCODE_GENERATION_ATTEMPTS = 15;
 const KEY_PREFIX = '/redirect-p2p/entry/';
 const STATIC_FILES_PROTOCOL = '/static-files/1.0.0';
@@ -108,6 +108,118 @@ clearOldRedirectData();
 loadRedirectsCacheFromLocalStorage();
 
 /**
+ * Validate multiaddr
+ * @param {string} addr - Multiaddr to validate
+ * @returns {boolean}
+ */
+async function validateMultiaddr(addr) {
+    try {
+        const ma = multiaddr(addr);
+        const protocols = ma.protoNames();
+        if (!protocols.includes('tcp') && !protocols.includes('wss')) {
+            debugLogger('WARN: Invalid multiaddr, missing tcp/wss: %s', addr);
+            return false;
+        }
+        // Test WebSocket connection
+        if (addr.includes('/wss')) {
+            const wsAddr = addr.split('/p2p/')[0].replace('/dns4/', 'wss://').replace('/tcp/', ':');
+            return new Promise((resolve) => {
+                const ws = new WebSocket(wsAddr);
+                ws.onopen = () => {
+                    debugLogger('INFO: WebSocket test connection successful for %s', wsAddr);
+                    ws.close();
+                    resolve(true);
+                };
+                ws.onerror = () => {
+                    debugLogger('ERROR: WebSocket test connection failed for %s', wsAddr);
+                    resolve(false);
+                };
+                setTimeout(() => {
+                    ws.close();
+                    resolve(false);
+                }, 5000);
+            });
+        }
+        return true;
+    } catch (err) {
+        debugLogger('ERROR: Failed to validate multiaddr %s: %o', addr, err);
+        return false;
+    }
+}
+
+/**
+ * Fetch and validate bootstrap node addresses
+ * @returns {Promise<string[]>}
+ */
+async function fetchBootstrapAddress() {
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const bootstrapUrl = isLocalhost
+        ? 'http://localhost:8080/bootstrap-address'
+        : 'https://libp2p.onrender.com/bootstrap-address';
+    const fallbackMultiaddrs = [
+        '/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+        '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
+        '/dns4/node0.preprod.protocol.ai/tcp/4001/p2p/12D3KooWSqV7Bj4SYuACMk3v3kq9X1P8dV5E2KGLYhDLrUrn7N2z'
+    ];
+    const primaryBootstrap = '/dns4/libp2p.onrender.com/tcp/4002/wss/p2p/12D3KooWRVv9r3A2hGRPiUUEedXUitDwBXN8BLa9BZBKrUfYtaRy';
+    let validMultiaddrs = [];
+
+    // Try primary bootstrap first
+    debugLogger('INFO: Validating primary bootstrap address: %s', primaryBootstrap);
+    if (await validateMultiaddr(primaryBootstrap)) {
+        validMultiaddrs.push(primaryBootstrap);
+        debugLogger('INFO: Primary bootstrap address validated: %s', primaryBootstrap);
+    } else {
+        debugLogger('WARN: Primary bootstrap address invalid: %s', primaryBootstrap);
+    }
+
+    // Fetch dynamic bootstrap address
+    try {
+        debugLogger('INFO: Запитую адресу бутстрапа з %s', bootstrapUrl);
+        const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) throw new Error(`Помилка HTTP: ${response.status}`);
+        const data = await response.json();
+        if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
+            let modifiedAddr = data.multiaddr;
+            if (!isLocalhost && modifiedAddr.includes('ws://')) {
+                modifiedAddr = modifiedAddr.replace('ws://', 'wss://');
+            }
+            if (modifiedAddr.includes('wss//')) {
+                modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
+            }
+            debugLogger('INFO: Отримано і змінено адресу бутстрапа: %s', modifiedAddr);
+            if (await validateMultiaddr(modifiedAddr)) {
+                validMultiaddrs.push(modifiedAddr);
+                debugLogger('INFO: Dynamic bootstrap address validated: %s', modifiedAddr);
+            } else {
+                debugLogger('WARN: Dynamic bootstrap address invalid: %s', modifiedAddr);
+            }
+        }
+    } catch (err) {
+        debugLogger('ERROR: Не вдалося отримати адресу бутстрапа: %o', err);
+    }
+
+    // Validate fallback addresses
+    for (const addr of fallbackMultiaddrs) {
+        debugLogger('INFO: Validating fallback bootstrap address: %s', addr);
+        if (await validateMultiaddr(addr)) {
+            validMultiaddrs.push(addr);
+            debugLogger('INFO: Fallback bootstrap address validated: %s', addr);
+        } else {
+            debugLogger('WARN: Fallback bootstrap address invalid: %s', addr);
+        }
+    }
+
+    if (validMultiaddrs.length === 0) {
+        debugLogger('ERROR: No valid bootstrap addresses found, using primary as fallback');
+        validMultiaddrs.push(primaryBootstrap); // Use primary even if invalid to avoid empty list
+    }
+
+    debugLogger('INFO: Final bootstrap addresses: %o', validMultiaddrs);
+    return validMultiaddrs;
+}
+
+/**
  * Publish node address to DHT
  */
 async function publishNodeAddress() {
@@ -159,14 +271,20 @@ async function discoverNodesFromDHT() {
                 const value = await node.services.dht.get(uint8ArrayFromString(key), DHT_GET_OPTIONS);
                 const nodeData = JSON.parse(uint8ArrayToString(value));
                 if (nodeData.multiaddrs && Array.isArray(nodeData.multiaddrs)) {
-                    nodeAddresses.push(...nodeData.multiaddrs.filter(addr => 
+                    const validAddrs = [];
+                    for (const addr of nodeData.multiaddrs) {
+                        if (await validateMultiaddr(addr)) {
+                            validAddrs.push(addr);
+                        }
+                    }
+                    nodeAddresses.push(...validAddrs.filter(addr => 
                         addr.includes('/wss') || addr.includes('/tcp') || addr.includes('/p2p-circuit')
                     ));
-                    debugLogger('INFO: Discovered node: %s with addresses: %o', key, nodeData.multiaddrs);
+                    debugLogger('INFO: Discovered node: %s with addresses: %o', key, validAddrs);
                     if (peerId === ownPeerId) {
-                        for (const addr of nodeData.multiaddrs) {
+                        for (const addr of validAddrs) {
                             try {
-                                await node.dial(multiaddr(addr), { timeout: 5000 });
+                                await node.dial(multiaddr(addr), { timeout: 10000 });
                                 debugLogger('INFO: Successfully dialed own address: %s', addr);
                             } catch (err) {
                                 debugLogger('ERROR: Failed to dial own address %s: %o', addr, err);
@@ -349,43 +467,6 @@ async function publishStaticFiles() {
 }
 
 /**
- * Fetch bootstrap node address
- * @returns {Promise<string[]>}
- */
-async function fetchBootstrapAddress() {
-    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const bootstrapUrl = isLocalhost
-        ? 'http://localhost:8080/bootstrap-address'
-        : 'https://libp2p.onrender.com/bootstrap-address';
-    const fallbackMultiaddrs = [
-        '/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-        '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ'
-    ];
-    try {
-        console.log('INFO: Запитую адресу бутстрапа з', bootstrapUrl);
-        const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
-        if (!response.ok) throw new Error(`Помилка HTTP: ${response.status}`);
-        const data = await response.json();
-        if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
-            let modifiedAddr = data.multiaddr;
-            if (!isLocalhost && modifiedAddr.includes('ws://')) {
-                modifiedAddr = modifiedAddr.replace('ws://', 'wss://');
-            }
-            if (modifiedAddr.includes('wss//')) {
-                modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
-            }
-            console.log('INFO: Отримано і змінено адресу бутстрапа:', modifiedAddr);
-            return [modifiedAddr, ...fallbackMultiaddrs].filter(addr => addr.includes('/wss') || addr.includes('/tcp'));
-        }
-        throw new Error('Некоректна адреса бутстрапа');
-    } catch (err) {
-        console.error('ERROR: Не вдалося отримати адресу бутстрапа:', err);
-        console.log('INFO: Використовую резервний список бутстрапів:', fallbackMultiaddrs);
-        return fallbackMultiaddrs;
-    }
-}
-
-/**
  * HTTP polling for redirect synchronization (fallback mechanism)
  */
 async function syncRedirectsViaPolling() {
@@ -425,17 +506,24 @@ async function syncRedirectsViaDHT() {
         return;
     }
 
+    debugLogger('INFO: Starting DHT sync, cache size: %d', redirectsCache.size);
     try {
         for (const [shortCode] of redirectsCache) {
             const key = `${KEY_PREFIX}${shortCode}`;
+            debugLogger('INFO: Querying DHT for key: %s', key);
             try {
                 const recordBytes = await node.services.dht.get(uint8ArrayFromString(key), DHT_GET_OPTIONS);
                 if (recordBytes) {
                     const redirect = JSON.parse(uint8ArrayToString(recordBytes));
+                    debugLogger('INFO: DHT response for %s: %o', shortCode, redirect);
                     if (redirect && redirect.destinationUrl && redirect.shortCode === shortCode) {
                         redirectsCache.set(shortCode, redirect);
                         debugLogger(`INFO: Synced redirect ${shortCode} from DHT`);
+                    } else {
+                        debugLogger('INFO: Invalid DHT record for %s', shortCode);
                     }
+                } else {
+                    debugLogger('INFO: No DHT record for %s', shortCode);
                 }
             } catch (err) {
                 debugLogger(`ERROR: Failed to sync redirect ${shortCode} from DHT: %o`, err);
@@ -488,9 +576,9 @@ async function startNodeInternal() {
     updateP2PStatus('Initializing node...');
 
     try {
-        debugLogger("INFO: Fetching bootstrap addresses...");
+        debugLogger("INFO: Fetching and validating bootstrap addresses...");
         const bootstrapMultiaddrs = await fetchBootstrapAddress();
-        debugLogger('INFO: Bootstrap addresses: %o', bootstrapMultiaddrs);
+        debugLogger('INFO: Validated bootstrap addresses: %o', bootstrapMultiaddrs);
 
         // Dynamic import of mDNS for local testing
         let mdnsDiscovery;
@@ -543,6 +631,7 @@ async function startNodeInternal() {
                     { urls: 'stun:stun2.l.google.com:19302' },
                     { urls: 'stun:stun3.l.google.com:19302' },
                     { urls: 'stun:stun4.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' },
                     {
                         urls: 'turn:global.turn.twilio.com:3478?transport=udp',
                         username: 'default-turn-username',
@@ -573,7 +662,6 @@ async function startNodeInternal() {
             identify: identify(),
             ping: ping()
         };
-        // Додаємо relay тільки для небраузерного оточення
         if (!isBrowser) {
             services.relay = circuitRelayServer({
                 advertise: true
@@ -585,8 +673,14 @@ async function startNodeInternal() {
                 listen: isBrowser ? [] : ['/ip4/0.0.0.0/tcp/4001', '/ip4/0.0.0.0/tcp/4002/wss']
             },
             transports: [
-                webSockets({ filter: wsFilter }),
-                webRTC(webrtcConfig),
+                webSockets({
+                    filter: wsFilter,
+                    onConnection: (conn) => debugLogger('INFO: WebSocket connection established: %o', conn.remoteAddr.toString())
+                }),
+                webRTC({
+                    ...webrtcConfig,
+                    onConnection: (conn) => debugLogger('INFO: WebRTC connection established: %o', conn.remoteAddr.toString())
+                }),
                 circuitRelayTransport({
                     discoverRelays: 2,
                     reservationConcurrency: 3
@@ -610,9 +704,9 @@ async function startNodeInternal() {
                 minConnections: 1,
                 maxConnections: 100,
                 autoDial: true,
-                dialTimeout: 10000
+                dialTimeout: 20000 // Збільшено таймаут
             },
-            metrics: undefined // Вимкнено метрики
+            metrics: undefined
         };
         debugLogger("INFO: Libp2p services config: %o", config.services);
         debugLogger("INFO: Libp2p full config: %o", config);
@@ -697,22 +791,30 @@ async function startNodeInternal() {
         // Parallel execution of critical operations
         const criticalPromises = [];
 
-        // 1. Connect to bootstrap nodes
+        // 1. Connect to bootstrap nodes with retries
         debugLogger('INFO: Dialing bootstrap nodes: %o', bootstrapMultiaddrs);
         updateP2PStatus('Connecting to network...');
         let successfulConnections = 0;
-        const dialPromises = bootstrapMultiaddrs.map(async (addr) => {
-            try {
-                const ma = multiaddr(addr);
-                debugLogger('INFO: Attempting to dial bootstrap node: %s', addr);
-                await node.dial(ma, { timeout: 5000 });
-                debugLogger('INFO: Successfully dialed bootstrap node: %s', addr);
-                successfulConnections++;
-            } catch (err) {
-                debugLogger('ERROR: Failed to dial bootstrap node %s: %o', addr, err);
-            }
-        });
-        criticalPromises.push(Promise.all(dialPromises));
+        const maxRetries = 3;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            debugLogger('INFO: Dial attempt %d of %d', attempt, maxRetries);
+            const dialPromises = bootstrapMultiaddrs.map(async (addr) => {
+                try {
+                    const ma = multiaddr(addr);
+                    debugLogger('INFO: Attempting to dial bootstrap node: %s', addr);
+                    await node.dial(ma, { timeout: 10000 });
+                    debugLogger('INFO: Successfully dialed bootstrap node: %s', addr);
+                    successfulConnections++;
+                } catch (err) {
+                    debugLogger('ERROR: Failed to dial bootstrap node %s: %o', addr, err);
+                }
+            });
+            await Promise.all(dialPromises);
+            if (successfulConnections > 0) break;
+            debugLogger('INFO: No connections on attempt %d, retrying...', attempt);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        criticalPromises.push(Promise.resolve());
 
         // 2. Publish node address
         criticalPromises.push(publishNodeAddress());
@@ -747,7 +849,7 @@ async function startNodeInternal() {
                     try {
                         const ma = multiaddr(addr);
                         debugLogger('INFO: Attempting to dial DHT node: %s', addr);
-                        await node.dial(ma, { timeout: 5000 });
+                        await node.dial(ma, { timeout: 10000 });
                         debugLogger('INFO: Successfully dialed DHT node: %s', addr);
                         successfulConnections++;
                     } catch (err) {
@@ -769,7 +871,7 @@ async function startNodeInternal() {
 
         // Start periodic reconnection and synchronization
         debugLogger("INFO: Starting periodic republishing and DHT sync");
-        startRepPublishing(); // Виправлено з startRepublishing на startRepPublishing
+        startRepPublishing();
         startDHTSync();
 
         // Background operations
@@ -781,7 +883,7 @@ async function startNodeInternal() {
                     try {
                         const ma = multiaddr(addr);
                         debugLogger('INFO: Attempting to dial discovered node: %s', addr);
-                        await node.dial(ma, { timeout: 5000 });
+                        await node.dial(ma, { timeout: 10000 });
                         debugLogger('INFO: Successfully dialed discovered node: %s', addr);
                     } catch (err) {
                         debugLogger('ERROR: Failed to dial discovered node %s: %o', addr, err);
@@ -812,6 +914,7 @@ function startPolling() {
     if (pollingIntervalId) {
         clearInterval(pollingIntervalId);
     }
+    debugLogger('INFO: Starting HTTP polling');
     syncRedirectsViaPolling();
     pollingIntervalId = setInterval(syncRedirectsViaPolling, 5 * 1000);
     debugLogger('INFO: Started HTTP polling for redirect synchronization with 5s interval');
@@ -1032,7 +1135,7 @@ async function createRedirect(url, description = '') {
         }
         try {
             debugLogger(`INFO: Querying DHT for key: ${key}`);
-            await node.services.dht.get(uint8ArrayFromString(key), { ...DHT_GET_OPTIONS, timeout: 5000 });
+            await node.services.dht.get(uint8ArrayFromString(key), { ...DHT_GET_OPTIONS, timeout: 10000 });
             debugLogger(`WARN: DHT collision for shortCode ${shortCode} on attempt ${attempts}`);
         } catch (err) {
             if (err.code === 'ERR_NOT_FOUND' || err.message.includes('not found')) {
@@ -1533,7 +1636,7 @@ window.debugNodeStatus = () => {
         initialized: !!node,
         status: node?.status || 'not initialized',
         peerId: node?.peerId?.toString() || 'unknown',
-        peers: node?.getPeers().map(p => p.toString()) || [],
+        peers: node?.obligatory(getPeers).map(p => p.toString()) || [],
         multiaddrs: node?.getMultiaddrs().map(ma => ma.toString()) || [],
         pubsubTopics: node?.services?.pubsub?.getTopics() || [],
         connections: node?.getConnections().length || 0,
@@ -1549,7 +1652,7 @@ window.testP2P = {
         const addrs = await discoverNodesFromDHT();
         for (const addr of addrs) {
             try {
-                await node.dial(multiaddr(addr), { timeout: 5000 });
+                await node.dial(multiaddr(addr), { timeout: 10000 });
                 console.log(`Dialed: ${addr}`);
             } catch (err) {
                 console.error(`Failed to dial ${addr}:`, err);
@@ -1560,7 +1663,7 @@ window.testP2P = {
         const addrs = await fetchBootstrapAddress();
         for (const addr of addrs) {
             try {
-                await node.dial(multiaddr(addr), { timeout: 5000 });
+                await node.dial(multiaddr(addr), { timeout: 10000 });
                 console.log(`Dialed bootstrap: ${addr}`);
             } catch (err) {
                 console.error(`Failed to dial bootstrap ${addr}:`, err);
