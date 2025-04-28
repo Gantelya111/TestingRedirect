@@ -122,7 +122,13 @@ async function validateMultiaddr(addr) {
         }
         // Test WebSocket connection
         if (addr.includes('/wss')) {
-            const wsAddr = addr.split('/p2p/')[0].replace('/dns4/', 'wss://').replace('/tcp/', ':');
+            let wsAddr = addr.split('/p2p/')[0].replace('/dns4/', 'wss://').replace('/tcp/', ':');
+            // Try port 443 if 4002 is specified
+            if (wsAddr.includes(':4002')) {
+                wsAddr = wsAddr.replace(':4002', ':443');
+                debugLogger('INFO: Adjusted WebSocket address to port 443: %s', wsAddr);
+            }
+            debugLogger('INFO: Testing WebSocket connection to %s', wsAddr);
             return new Promise((resolve) => {
                 const ws = new WebSocket(wsAddr);
                 ws.onopen = () => {
@@ -130,14 +136,19 @@ async function validateMultiaddr(addr) {
                     ws.close();
                     resolve(true);
                 };
-                ws.onerror = () => {
-                    debugLogger('ERROR: WebSocket test connection failed for %s', wsAddr);
+                ws.onerror = (err) => {
+                    debugLogger('ERROR: WebSocket test connection failed for %s: %o', wsAddr, err);
+                    resolve(false);
+                };
+                ws.onclose = (event) => {
+                    debugLogger('ERROR: WebSocket closed for %s with code: %d, reason: %s', wsAddr, event.code, event.reason || 'unknown');
                     resolve(false);
                 };
                 setTimeout(() => {
+                    debugLogger('WARN: WebSocket test timed out for %s', wsAddr);
                     ws.close();
                     resolve(false);
-                }, 5000);
+                }, 10000); // Збільшено до 10 секунд
             });
         }
         return true;
@@ -146,7 +157,12 @@ async function validateMultiaddr(addr) {
         return false;
     }
 }
+}
 
+/**
+ * Fetch and validate bootstrap node addresses
+ * @returns {Promise<string[]>}
+ */
 /**
  * Fetch and validate bootstrap node addresses
  * @returns {Promise<string[]>}
@@ -157,14 +173,15 @@ async function fetchBootstrapAddress() {
         ? 'http://localhost:8080/bootstrap-address'
         : 'https://libp2p.onrender.com/bootstrap-address';
     const fallbackMultiaddrs = [
-        '/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-        '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
-        '/dns4/node0.preprod.protocol.ai/tcp/4001/p2p/12D3KooWSqV7Bj4SYuACMk3v3kq9X1P8dV5E2KGLYhDLrUrn7N2z'
+        '/dns4/bootstrap.libp2p.io/tcp/443/wss/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+        '/dns4/bootstrap.libp2p.io/tcp/443/wss/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
+        '/dns4/node0.preprod.protocol.ai/tcp/443/wss/p2p/12D3KooWSqV7Bj4SYuACMk3v3kq9X1P8dV5E2KGLYhDLrUrn7N2z',
+        '/dns4/node1.preprod.protocol.ai/tcp/443/wss/p2p/12D3KooWAE8ozW5rWug2kA4oqV3jNq22vBs3Mpz7Xj8mYUt6f4mV'
     ];
-    const primaryBootstrap = '/dns4/libp2p.onrender.com/tcp/4002/wss/p2p/12D3KooWRVv9r3A2hGRPiUUEedXUitDwBXN8BLa9BZBKrUfYtaRy';
+    const primaryBootstrap = '/dns4/libp2p.onrender.com/tcp/443/wss/p2p/12D3KooWRVv9r3A2hGRPiUUEedXUitDwBXN8BLa9BZBKrUfYtaRy';
     let validMultiaddrs = [];
 
-    // Try primary bootstrap first
+    // Try primary bootstrap first (libp2p.onrender.com)
     debugLogger('INFO: Validating primary bootstrap address: %s', primaryBootstrap);
     if (await validateMultiaddr(primaryBootstrap)) {
         validMultiaddrs.push(primaryBootstrap);
@@ -177,6 +194,7 @@ async function fetchBootstrapAddress() {
     try {
         debugLogger('INFO: Запитую адресу бутстрапа з %s', bootstrapUrl);
         const response = await fetch(bootstrapUrl, { signal: AbortSignal.timeout(5000) });
+        debugLogger('INFO: Bootstrap fetch response status: %d, headers: %o', response.status, Object.fromEntries(response.headers));
         if (!response.ok) throw new Error(`Помилка HTTP: ${response.status}`);
         const data = await response.json();
         if (data.multiaddr && !data.multiaddr.includes('127.0.0.1')) {
@@ -186,6 +204,10 @@ async function fetchBootstrapAddress() {
             }
             if (modifiedAddr.includes('wss//')) {
                 modifiedAddr = modifiedAddr.replace('wss//', 'wss/');
+            }
+            if (modifiedAddr.includes(':4002')) {
+                modifiedAddr = modifiedAddr.replace(':4002', ':443');
+                debugLogger('INFO: Adjusted dynamic bootstrap address to port 443: %s', modifiedAddr);
             }
             debugLogger('INFO: Отримано і змінено адресу бутстрапа: %s', modifiedAddr);
             if (await validateMultiaddr(modifiedAddr)) {
@@ -210,15 +232,19 @@ async function fetchBootstrapAddress() {
         }
     }
 
-    if (validMultiaddrs.length === 0) {
+    // If only primary bootstrap is valid, make it the main server
+    if (validMultiaddrs.length === 1 && validMultiaddrs[0] === primaryBootstrap) {
+        debugLogger('INFO: Only primary bootstrap is valid, setting as main server: %s', primaryBootstrap);
+    } else if (validMultiaddrs.length === 0) {
         debugLogger('ERROR: No valid bootstrap addresses found, using primary as fallback');
         validMultiaddrs.push(primaryBootstrap); // Use primary even if invalid to avoid empty list
     }
 
+    // Ensure primary bootstrap is first in the list
+    validMultiaddrs = [primaryBootstrap, ...validMultiaddrs.filter(addr => addr !== primaryBootstrap)];
     debugLogger('INFO: Final bootstrap addresses: %o', validMultiaddrs);
     return validMultiaddrs;
 }
-
 /**
  * Publish node address to DHT
  */
@@ -477,20 +503,28 @@ async function syncRedirectsViaPolling() {
     try {
         debugLogger('INFO: Starting HTTP polling to https://libp2p.onrender.com/redirects');
         const response = await fetch('https://libp2p.onrender.com/redirects', { signal: AbortSignal.timeout(5000) });
-        debugLogger('INFO: Polling response status: %d', response.status);
+        debugLogger('INFO: Polling response status: %d, headers: %o', response.status, Object.fromEntries(response.headers));
         if (!response.ok) {
             throw new Error(`HTTP error: ${response.status}`);
         }
         const redirects = await response.json();
         debugLogger('INFO: Polling fetched redirects: %o', redirects);
+        if (!Array.isArray(redirects) || redirects.length === 0) {
+            debugLogger('WARN: No redirects received from polling');
+            updateP2PStatus('No redirects available via polling', true);
+            return;
+        }
         redirects.forEach(r => {
             if (r.shortCode && r.destinationUrl) {
                 redirectsCache.set(r.shortCode, r);
+                debugLogger('INFO: Added redirect to cache: %s', r.shortCode);
+            } else {
+                debugLogger('WARN: Invalid redirect data: %o', r);
             }
         });
         saveRedirectsCacheToLocalStorage();
-        debugLogger('INFO: Synced redirects via HTTP polling');
-        updateP2PStatus('Synced redirects via polling');
+        debugLogger('INFO: Synced %d redirects via HTTP polling', redirects.length);
+        updateP2PStatus(`Synced ${redirects.length} redirects via polling`);
     } catch (err) {
         debugLogger('ERROR: Failed to sync redirects via polling: %o', err);
         updateP2PStatus('Failed to sync redirects via polling', true);
