@@ -9,7 +9,6 @@ const debugLogger = logger('bootstrap-node');
 const isProduction = process.env.NODE_ENV === 'production';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 0;
 
-// Обмежений кеш редіректів
 const MAX_CACHE_SIZE = 1000;
 const redirectsCache = new Map();
 
@@ -25,11 +24,8 @@ function pruneCacheIfNeeded() {
 
 const app = express();
 const server = createServer(app);
-
-// Збільшуємо ліміт слухачів
 server.setMaxListeners(15);
 
-// Налаштування PeerServer
 const peerServer = PeerServer({
     port: HTTP_PORT,
     path: '/peerjs-server',
@@ -45,26 +41,22 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static('public'));
 
-// Ендпоінт для перевірки стану
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', peerServerRunning: true });
 });
 
-// Ендпоінт для повернення порту
 app.get('/port', (req, res) => {
     const port = server.address()?.port || HTTP_PORT;
     debugLogger('INFO: Returning active port: %d', port);
     res.json({ port });
 });
 
-// Ендпоінт для списку пірів
 app.get('/peers', (req, res) => {
     const peers = Array.from(peerServer.getClients().keys());
     debugLogger('INFO: Returning peers: %o', peers);
     res.json(peers);
 });
 
-// Ендпоінт для редіректів
 app.get('/redirects', (req, res) => {
     const redirects = Array.from(redirectsCache.entries()).map(([shortCode, redirect]) => ({
         shortCode,
@@ -77,7 +69,6 @@ app.get('/redirects', (req, res) => {
     res.json(redirects);
 });
 
-// Маршрутизація для /r/<shortCode>
 app.get('/r/:shortCode', async (req, res) => {
     const shortCode = req.params.shortCode;
     const redirect = redirectsCache.get(shortCode);
@@ -88,7 +79,6 @@ app.get('/r/:shortCode', async (req, res) => {
     }
 });
 
-// Обробка PeerJS подій
 peerServer.on('connection', (client) => {
     debugLogger('INFO: Peer connected: %s', client.getId());
 });
@@ -97,9 +87,7 @@ peerServer.on('disconnect', (client) => {
     debugLogger('INFO: Peer disconnected: %s', client.getId());
 });
 
-// Запуск сервера
 function startServer(port) {
-    // Очищаємо старі слухачі
     server.removeAllListeners('listening');
     server.removeAllListeners('error');
 
