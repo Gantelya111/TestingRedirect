@@ -7,8 +7,8 @@ import { logger } from '@libp2p/logger';
 const debugLogger = logger('bootstrap-node');
 
 const isProduction = process.env.NODE_ENV === 'production';
-const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 const HOST = '0.0.0.0';
+const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
 const MAX_CACHE_SIZE = 1000;
 const redirectsCache = new Map();
@@ -28,12 +28,15 @@ const server = createServer(app);
 server.setMaxListeners(15);
 
 const peerServer = PeerServer({
-    port: HTTP_PORT,
+    port: isProduction ? 0 : HTTP_PORT, // У продакшені порт для PeerServer не потрібен, бо він використовує той самий server
     host: HOST,
     path: '/peerjs-server',
     ssl: isProduction ? {} : undefined,
     proxied: isProduction
 });
+
+// Прив’язуємо PeerServer до того ж HTTP-сервера
+peerServer.listen(server);
 
 app.use(cors({
     origin: ['https://libp2p.onrender.com', 'http://localhost:8080'],
@@ -110,6 +113,11 @@ function startServer(port, host) {
             debugLogger('ERROR: Server error: %o', err);
             throw err; // Для дебагу на Render
         }
+    });
+
+    server.on('listening', () => {
+        const addr = server.address();
+        debugLogger('INFO: Server listening on %s:%d', addr.address, addr.port);
     });
 }
 
