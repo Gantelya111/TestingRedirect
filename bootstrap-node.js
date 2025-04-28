@@ -7,7 +7,8 @@ import { logger } from '@libp2p/logger';
 const debugLogger = logger('bootstrap-node');
 
 const isProduction = process.env.NODE_ENV === 'production';
-const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 0;
+const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
+const HOST = '0.0.0.0';
 
 const MAX_CACHE_SIZE = 1000;
 const redirectsCache = new Map();
@@ -28,6 +29,7 @@ server.setMaxListeners(15);
 
 const peerServer = PeerServer({
     port: HTTP_PORT,
+    host: HOST,
     path: '/peerjs-server',
     ssl: isProduction ? {} : undefined,
     proxied: isProduction
@@ -87,13 +89,13 @@ peerServer.on('disconnect', (client) => {
     debugLogger('INFO: Peer disconnected: %s', client.getId());
 });
 
-function startServer(port) {
+function startServer(port, host) {
     server.removeAllListeners('listening');
     server.removeAllListeners('error');
 
-    server.listen(port, () => {
+    server.listen(port, host, () => {
         const actualPort = server.address()?.port || port;
-        debugLogger('INFO: Server started on port %d', actualPort);
+        debugLogger('INFO: Server started on %s:%d', host, actualPort);
         debugLogger('INFO: PeerJS Server running at %s:%d/peerjs-server', isProduction ? 'libp2p.onrender.com' : 'localhost', actualPort);
     });
 
@@ -102,15 +104,16 @@ function startServer(port) {
             debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
             setTimeout(() => {
                 server.close();
-                startServer(port || 0);
+                startServer(port, host);
             }, 5000);
         } else {
             debugLogger('ERROR: Server error: %o', err);
+            throw err; // Для дебагу на Render
         }
     });
 }
 
-startServer(HTTP_PORT);
+startServer(HTTP_PORT, HOST);
 
 process.on('SIGTERM', () => {
     debugLogger('INFO: Received SIGTERM, shutting down...');
