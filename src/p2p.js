@@ -102,7 +102,7 @@ async function startNodeInternal() {
     const peerConfig = {
         host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
         path: '/peerjs-server',
-        secure: isHttps, // Використовуємо wss:// для HTTPS (isHttps визначено як window.location.protocol === 'https:')
+        secure: isHttps,
         debug: 3,
         pingInterval: 5000
     };
@@ -120,40 +120,45 @@ async function startNodeInternal() {
             peerConfig.port = 8080;
         }
     } else {
-        // На продакшені не вказуємо порт, бо Render використовує 443 для HTTPS
         delete peerConfig.port;
     }
 
-    debugLogger('INFO: PeerJS config:', peerConfig);
+    debugLogger('INFO: PeerJS config: %o', peerConfig);
     const peerId = `p2p-redirect-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    debugLogger('INFO: Generated peerId: %s', peerId);
     peer = new Peer(peerId, peerConfig);
 
     await new Promise((resolve, reject) => {
         peer.on('open', () => {
-            debugLogger('INFO: PeerJS initialized with ID:', peer.id);
+            debugLogger('INFO: PeerJS initialized with ID: %s', peer.id);
             updateP2PStatus('Peer initialized');
             resolve();
         });
         peer.on('error', (err) => {
-            debugLogger('ERROR: PeerJS initialization failed:', err);
+            debugLogger('ERROR: PeerJS initialization failed: %o', err);
             updateP2PStatus(`Initialization failed: ${err.message}`, true);
             reject(err);
+        });
+        peer.on('close', () => {
+            debugLogger('INFO: PeerJS connection closed');
+            updateP2PStatus('Connection closed', true);
         });
     });
 
     peer.on('connection', (conn) => {
-        debugLogger('INFO: Incoming connection from:', conn.peer);
+        debugLogger('INFO: Incoming connection from: %s', conn.peer);
         setupConnection(conn);
     });
 
     const knownPeers = await fetchKnownPeers();
+    debugLogger('INFO: Known peers: %o', knownPeers);
     for (const peerId of knownPeers) {
         if (peerId !== peer.id && connections.size < MAX_CONNECTIONS) {
             try {
                 const conn = peer.connect(peerId);
                 setupConnection(conn);
             } catch (err) {
-                debugLogger('ERROR: Failed to connect to peer:', peerId, err);
+                debugLogger('ERROR: Failed to connect to peer: %s, error: %o', peerId, err);
             }
         }
     }
