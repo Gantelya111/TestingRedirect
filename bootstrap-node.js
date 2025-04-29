@@ -10,7 +10,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const HOST = '0.0.0.0';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
-const MAX_CACHE_SIZE = 1000;
+const MAX_CACHE_SIZE = 500; // Зменшено для економії пам’яті
 const redirectsCache = new Map();
 
 function pruneCacheIfNeeded() {
@@ -25,26 +25,26 @@ function pruneCacheIfNeeded() {
 
 const app = express();
 const server = createServer(app);
-server.setMaxListeners(15);
 
-// Налаштування PeerServer
-const peerServer = PeerServer({
-    path: '/peerjs-server',
-    proxied: isProduction,
-    ssl: isProduction ? {} : undefined,
-    server,
-    debug: true // Включаємо дебаг PeerServer
+// Виправлення MaxListenersExceededWarning
+server.setMaxListeners(20);
+
+// Дебаг запитів
+app.use((req, res, next) => {
+    debugLogger('INFO: Incoming request: %s %s', req.method, req.url);
+    next();
 });
 
 app.use(cors({
-    origin: ['https://libp2p.onrender.com', 'http://localhost:8080'],
+    origin: ['https://libp2p.onrender.com', 'http://localhost:8080', 'http://localhost:3000'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
-app.use(express.static('public'));
 
+// Маршрути Express
 app.get('/health', (req, res) => {
+    debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
 });
 
@@ -81,6 +81,7 @@ app.get('/redirects', (req, res) => {
 app.post('/redirects', (req, res) => {
     const { shortCode, destinationUrl, description, passwordHash } = req.body;
     if (!shortCode || !destinationUrl) {
+        debugLogger('ERROR: Missing shortCode or destinationUrl: %o', req.body);
         return res.status(400).json({ error: 'Missing shortCode or destinationUrl' });
     }
     const redirect = {
@@ -101,6 +102,7 @@ app.put('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     const { destinationUrl, description } = req.body;
     if (!redirectsCache.has(shortCode)) {
+        debugLogger('ERROR: Redirect not found: %s', shortCode);
         return res.status(404).json({ error: 'Redirect not found' });
     }
     const redirect = redirectsCache.get(shortCode);
@@ -115,6 +117,7 @@ app.put('/redirects/:shortCode', (req, res) => {
 app.delete('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     if (!redirectsCache.has(shortCode)) {
+        debugLogger('INFO: Redirect not found, skipping: %s', shortCode);
         return res.json({ success: true, message: 'Redirect not found' });
     }
     redirectsCache.delete(shortCode);
@@ -129,8 +132,22 @@ app.get('/r/:shortCode', (req, res) => {
         debugLogger('INFO: Redirecting %s to %s', shortCode, redirect.destinationUrl);
         res.redirect(redirect.destinationUrl);
     } else {
+        debugLogger('ERROR: Redirect not found: %s', shortCode);
         res.status(404).send('Redirect not found');
     }
+});
+
+// express.static після маршрутів
+app.use(express.static('public'));
+
+// Налаштування PeerServer
+const peerServer = PeerServer({
+    port: HTTP_PORT,
+    path: '/peerjs-server',
+    proxied: isProduction,
+    server,
+    debug: true,
+    generateClientId: () => `peer-${Math.random().toString(36).slice(2)}`
 });
 
 peerServer.on('connection', (client) => {
@@ -145,7 +162,12 @@ peerServer.on('error', (err) => {
     debugLogger('ERROR: PeerServer error: %o', err);
 });
 
+peerServer.on('message', (client, message) => {
+    debugLogger('INFO: WebSocket message from %s: %o', client.getId(), message);
+});
+
 function startServer(port, host) {
+    // Очищення слухачів
     server.removeAllListeners('listening');
     server.removeAllListeners('error');
 
@@ -156,6 +178,7 @@ function startServer(port, host) {
     });
 
     server.on('error', (err) => {
+        debugLogger('ERROR: Server failed to start: %o', err);
         if (err.code === 'EADDRINUSE') {
             debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
             setTimeout(() => {
@@ -163,18 +186,18 @@ function startServer(port, host) {
                 startServer(port, host);
             }, 5000);
         } else {
-            debugLogger('ERROR: Server error: %o', err);
             throw err;
         }
     });
-
-    server.on('listening', () => {
-        const addr = server.address();
-        debugLogger('INFO: Server listening on %s:%d', addr.address, addr.port);
-    });
 }
 
-startServer(HTTP_PORT, HOST);
+try {
+    debugLogger('INFO: Starting server on port %d', HTTP_PORT);
+    startServer(HTTP_PORT, HOST);
+} catch (err) {
+    debugLogger('ERROR: Failed to start server: %o', err);
+    process.exit(1);
+}
 
 process.on('SIGTERM', () => {
     debugLogger('INFO: Received SIGTERM, shutting down...');
