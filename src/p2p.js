@@ -2,6 +2,18 @@ import Peer from 'peerjs';
 import { createHash } from 'crypto';
 import { fromString as uint8ArrayFromString, toString as uint8ArrayToString } from 'uint8arrays';
 
+// Експортуємо всі функції та змінні на верхньому рівні
+export {
+    startNodePromise,
+    stopNode,
+    createRedirect,
+    getRedirect,
+    updateRedirect,
+    deleteRedirect,
+    getLocalRedirects,
+    verifyRedirectPassword
+};
+
 // Локальний логер
 const debugLogger = console.log.bind(console, '[p2p-app]');
 
@@ -65,7 +77,7 @@ function loadRedirectsCacheFromLocalStorage() {
         if (cacheData) {
             const cacheObject = JSON.parse(cacheData);
             for (const key in cacheObject) {
-                if (cacheObject.hasOwnProperty(key)) {
+                if (Object.prototype.hasOwnProperty.call(cacheObject, key)) {
                     redirectsCache.set(key, cacheObject[key]);
                 }
             }
@@ -112,12 +124,13 @@ async function startNodeInternal() {
         // Налаштування конфігу для PeerJS
         const peerConfig = {
             host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
-            path: '/peerjs-server/peerjs', // Адаптовано під peerjs@1.5.2
+            path: '/peerjs-server',
             secure: !isLocalhost,
-            debug: 3 // Детальний дебаг
+            debug: 3,
+            pingInterval: 5000
         };
 
-        // Додаємо порт тільки для локального середовища
+        // Динамічний порт для локального середовища
         if (isLocalhost) {
             let port = 8080;
             try {
@@ -404,7 +417,7 @@ function startSync() {
     syncIntervalId = setInterval(syncRedirects, 10 * 60 * 1000);
 }
 
-// Републікація редіректів
+// Републікація редиректів
 function startRepPublishing() {
     debugLogger('INFO: Starting republishing interval');
     if (republishIntervalId) clearInterval(republishIntervalId);
@@ -810,7 +823,6 @@ window.testP2P = {
 
 const startNodePromise = startNodeInternal();
 
-// Визначаємо stopNode окремо
 async function stopNode() {
     if (peer) {
         peer.destroy();
@@ -825,15 +837,3 @@ async function stopNode() {
         updateP2PStatus('Stopped');
     }
 }
-
-// Експортуємо всі функції
-export {
-    startNodePromise,
-    stopNode,
-    createRedirect,
-    getRedirect,
-    updateRedirect,
-    deleteRedirect,
-    getLocalRedirects,
-    verifyRedirectPassword
-};
