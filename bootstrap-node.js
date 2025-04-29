@@ -1,13 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
-import { PeerServer } from 'peerjs-server';
+import { PeerServer } from 'peer';
 import { logger } from '@libp2p/logger';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const debugLogger = logger('bootstrap-node');
 
@@ -15,7 +10,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const HOST = '0.0.0.0';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
-const MAX_CACHE_SIZE = 100; // Зменшено для Render
+const MAX_CACHE_SIZE = 1000;
 const redirectsCache = new Map();
 
 function pruneCacheIfNeeded() {
@@ -30,44 +25,26 @@ function pruneCacheIfNeeded() {
 
 const app = express();
 const server = createServer(app);
+server.setMaxListeners(15);
 
-// Фікс MaxListenersExceededWarning
-server.setMaxListeners(20);
-
-// Дебаг запитів
-app.use((req, res, next) => {
-    debugLogger('INFO: Incoming request: %s %s', req.method, req.url);
-    next();
+// Налаштування PeerServer
+const peerServer = PeerServer({
+    path: '/peerjs-server',
+    proxied: isProduction,
+    ssl: isProduction ? {} : undefined,
+    server,
+    debug: true // Включаємо дебаг PeerServer
 });
 
 app.use(cors({
-    origin: ['https://libp2p.onrender.com', 'http://localhost:8080', 'http://localhost:3000'],
+    origin: ['https://libp2p.onrender.com', 'http://localhost:8080'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
+app.use(express.static('public'));
 
-// Кореневий маршрут
-app.get('/', (req, res) => {
-    debugLogger('INFO: Serving index.html for /');
-    const indexPath = path.join(__dirname, 'public', 'index.html');
-    res.sendFile(indexPath, (err) => {
-        if (err) {
-            debugLogger('ERROR: Failed to send index.html: %o', err);
-            res.status(500).send('Failed to load index.html');
-        }
-    });
-});
-
-// Тестовий ендпоінт
-app.get('/test', (req, res) => {
-    debugLogger('INFO: Test endpoint');
-    res.json({ status: 'ok', message: 'Server is running' });
-});
-
-// Інші маршрути
 app.get('/health', (req, res) => {
-    debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
 });
 
@@ -79,8 +56,8 @@ app.get('/port', (req, res) => {
 
 app.get('/peers', (req, res) => {
     try {
-        const clients = peerServer._clients || new Map();
-        const peers = Object.keys(clients.peerjs || {});
+        const clients = peerServer.getClients ? peerServer.getClients() : new Map();
+        const peers = Array.from(clients.keys());
         debugLogger('INFO: Returning peers: %o', peers);
         res.json(peers);
     } catch (err) {
@@ -104,7 +81,6 @@ app.get('/redirects', (req, res) => {
 app.post('/redirects', (req, res) => {
     const { shortCode, destinationUrl, description, passwordHash } = req.body;
     if (!shortCode || !destinationUrl) {
-        debugLogger('ERROR: Missing shortCode or destinationUrl: %o', req.body);
         return res.status(400).json({ error: 'Missing shortCode or destinationUrl' });
     }
     const redirect = {
@@ -125,7 +101,6 @@ app.put('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     const { destinationUrl, description } = req.body;
     if (!redirectsCache.has(shortCode)) {
-        debugLogger('ERROR: Redirect not found: %s', shortCode);
         return res.status(404).json({ error: 'Redirect not found' });
     }
     const redirect = redirectsCache.get(shortCode);
@@ -140,7 +115,6 @@ app.put('/redirects/:shortCode', (req, res) => {
 app.delete('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     if (!redirectsCache.has(shortCode)) {
-        debugLogger('INFO: Redirect not found, skipping: %s', shortCode);
         return res.json({ success: true, message: 'Redirect not found' });
     }
     redirectsCache.delete(shortCode);
@@ -155,28 +129,16 @@ app.get('/r/:shortCode', (req, res) => {
         debugLogger('INFO: Redirecting %s to %s', shortCode, redirect.destinationUrl);
         res.redirect(redirect.destinationUrl);
     } else {
-        debugLogger('ERROR: Redirect not found: %s', shortCode);
         res.status(404).send('Redirect not found');
     }
 });
 
-// Статичні файли після маршрутів
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Налаштування PeerServer
-const peerServer = PeerServer({
-    port: HTTP_PORT,
-    path: '/peerjs-server',
-    proxied: isProduction,
-    debug: true
-});
-
 peerServer.on('connection', (client) => {
-    debugLogger('INFO: Peer connected: %s', client.id);
+    debugLogger('INFO: Peer connected: %s', client.getId());
 });
 
 peerServer.on('disconnect', (client) => {
-    debugLogger('INFO: Peer disconnected: %s', client.id);
+    debugLogger('INFO: Peer disconnected: %s', client.getId());
 });
 
 peerServer.on('error', (err) => {
@@ -194,7 +156,6 @@ function startServer(port, host) {
     });
 
     server.on('error', (err) => {
-        debugLogger('ERROR: Server failed to start: %o', err);
         if (err.code === 'EADDRINUSE') {
             debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
             setTimeout(() => {
@@ -202,18 +163,18 @@ function startServer(port, host) {
                 startServer(port, host);
             }, 5000);
         } else {
+            debugLogger('ERROR: Server error: %o', err);
             throw err;
         }
     });
+
+    server.on('listening', () => {
+        const addr = server.address();
+        debugLogger('INFO: Server listening on %s:%d', addr.address, addr.port);
+    });
 }
 
-try {
-    debugLogger('INFO: Starting server on port %d', HTTP_PORT);
-    startServer(HTTP_PORT, HOST);
-} catch (err) {
-    debugLogger('ERROR: Failed to start server: %o', err);
-    process.exit(1);
-}
+startServer(HTTP_PORT, HOST);
 
 process.on('SIGTERM', () => {
     debugLogger('INFO: Received SIGTERM, shutting down...');
