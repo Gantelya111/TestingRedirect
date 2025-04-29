@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
-import { PeerServer } from 'peer';
+import { PeerServer } from 'peerjs-server';
 import { logger } from '@libp2p/logger';
 
 const debugLogger = logger('bootstrap-node');
@@ -27,13 +27,12 @@ const app = express();
 const server = createServer(app);
 server.setMaxListeners(15);
 
-// Дебаг усіх запитів
+// Дебаг запитів
 app.use((req, res, next) => {
     debugLogger('INFO: Incoming request: %s %s', req.method, req.url);
     next();
 });
 
-// Налаштування CORS і Express
 app.use(cors({
     origin: ['https://libp2p.onrender.com', 'http://localhost:8080', 'http://localhost:3000'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -42,7 +41,6 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static('public'));
 
-// Маршрути Express
 app.get('/health', (req, res) => {
     debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
@@ -137,14 +135,12 @@ app.get('/r/:shortCode', (req, res) => {
     }
 });
 
-// Налаштування PeerServer (після маршрутів Express)
 const peerServer = PeerServer({
     port: HTTP_PORT,
     path: '/peerjs-server',
     proxied: isProduction,
     server,
-    debug: true,
-    generateClientId: () => `peer-${Math.random().toString(36).slice(2)}`
+    debug: true
 });
 
 peerServer.on('connection', (client) => {
@@ -164,9 +160,6 @@ peerServer.on('message', (client, message) => {
 });
 
 function startServer(port, host) {
-    server.removeAllListeners('listening');
-    server.removeAllListeners('error');
-
     server.listen(port, host, () => {
         const actualPort = server.address()?.port || port;
         debugLogger('INFO: Server started on %s:%d', host, actualPort);
@@ -184,11 +177,6 @@ function startServer(port, host) {
         } else {
             throw err;
         }
-    });
-
-    server.on('listening', () => {
-        const addr = server.address();
-        debugLogger('INFO: Server listening on %s:%d', addr.address, addr.port);
     });
 }
 
