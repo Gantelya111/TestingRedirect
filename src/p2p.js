@@ -102,7 +102,7 @@ async function startNodeInternal() {
     const peerConfig = {
         host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
         path: '/peerjs-server',
-        secure: isProduction,
+        secure: isHttps, // Використовуємо wss:// для HTTPS (isHttps визначено як window.location.protocol === 'https:')
         debug: 3,
         pingInterval: 5000
     };
@@ -119,6 +119,9 @@ async function startNodeInternal() {
             debugLogger('WARN: Failed to fetch port, using 8080:', err);
             peerConfig.port = 8080;
         }
+    } else {
+        // На продакшені не вказуємо порт, бо Render використовує 443 для HTTPS
+        delete peerConfig.port;
     }
 
     debugLogger('INFO: PeerJS config:', peerConfig);
