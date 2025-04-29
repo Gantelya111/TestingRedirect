@@ -15,7 +15,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const HOST = '0.0.0.0';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
-const MAX_CACHE_SIZE = 100;
+const MAX_CACHE_SIZE = 200; // Зменшуємо для стабільності
 const redirectsCache = new Map();
 
 function pruneCacheIfNeeded() {
@@ -47,8 +47,7 @@ app.use(express.json());
 
 // Статичні файли
 app.use(express.static(path.join(__dirname, 'public'), {
-    index: 'index.html',
-    fallthrough: false // Запобігає помилкам
+    index: 'index.html' // Явно вказуємо index.html
 }));
 
 // Явний маршрут для /
@@ -67,7 +66,7 @@ app.get('/', (req, res) => {
 const peerServer = PeerServer({
     path: '/peerjs-server',
     proxied: isProduction,
-    port: HTTP_PORT,
+    port: HTTP_PORT, // Явно вказуємо порт
     server,
     debug: true
 });
@@ -199,6 +198,11 @@ function startServer(port, host) {
         } else {
             throw err;
         }
+    });
+
+    server.on('listening', () => {
+        const addr = server.address();
+        debugLogger('INFO: Server listening on %s:%d', addr.address, addr.port);
     });
 }
 
