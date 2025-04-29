@@ -113,7 +113,8 @@ async function startNodeInternal() {
         const peerConfig = {
             host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
             path: '/peerjs-server',
-            secure: !isLocalhost
+            secure: !isLocalhost,
+            debug: 3 // Включаємо детальний дебаг PeerJS
         };
 
         // Додаємо порт тільки для локального середовища
@@ -328,10 +329,6 @@ async function fetchKnownPeers() {
 
 // HTTP polling
 async function syncRedirectsViaPolling() {
-    if (!isHttps && !isLocalhost) {
-        debugLogger('WARN: HTTP polling disabled in non-HTTPS environment');
-        return;
-    }
     try {
         const pollingUrl = `${BASE_URL}/redirects`;
         debugLogger('INFO: Starting HTTP polling to %s', pollingUrl);
@@ -440,16 +437,6 @@ async function createRedirect(url, description = '') {
     if (!url || typeof url !== 'string' || url.length < 5) {
         debugLogger('ERROR: Invalid URL provided: %s', url);
         throw new Error('Invalid URL provided');
-    }
-
-    // Спроба ініціалізувати PeerJS
-    if (!peer || !peer.open) {
-        debugLogger('WARN: Peer not ready, attempting initialization');
-        try {
-            await startNodeInternal();
-        } catch (err) {
-            debugLogger('WARN: PeerJS initialization failed, proceeding with HTTP: %o', err);
-        }
     }
 
     let shortCode;
