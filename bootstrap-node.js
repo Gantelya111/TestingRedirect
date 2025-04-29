@@ -15,7 +15,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const HOST = '0.0.0.0';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
-const MAX_CACHE_SIZE = 200; // Зменшено для стабільності
+const MAX_CACHE_SIZE = 100; // Зменшено для стабільності
 const redirectsCache = new Map();
 
 function pruneCacheIfNeeded() {
@@ -47,17 +47,24 @@ app.use(express.json());
 
 // Явний маршрут для index.html
 app.get('/', (req, res) => {
-    debugLogger('INFO: Serving index.html');
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    debugLogger('INFO: Serving index.html for /');
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    res.sendFile(indexPath, (err) => {
+        if (err) {
+            debugLogger('ERROR: Failed to send index.html: %o', err);
+            res.status(500).send('Failed to load index.html');
+        }
+    });
 });
 
+// Статичні файли
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Налаштування PeerServer
 const peerServer = PeerServer({
     path: '/peerjs-server',
     proxied: isProduction,
-    port: HTTP_PORT, // Явно вказуємо порт
+    port: HTTP_PORT,
     server,
     debug: true
 });
