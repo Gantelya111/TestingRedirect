@@ -32,7 +32,8 @@ const peerServer = PeerServer({
     path: '/peerjs-server',
     proxied: isProduction,
     ssl: isProduction ? {} : undefined,
-    server
+    server,
+    debug: true // Включаємо дебаг PeerServer
 });
 
 app.use(cors({
