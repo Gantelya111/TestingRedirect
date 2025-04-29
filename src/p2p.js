@@ -112,9 +112,9 @@ async function startNodeInternal() {
         // Налаштування конфігу для PeerJS
         const peerConfig = {
             host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
-            path: '/peerjs-server',
+            path: '/peerjs-server/peerjs', // Адаптовано під peerjs@1.5.2
             secure: !isLocalhost,
-            debug: 3 // Включаємо детальний дебаг PeerJS
+            debug: 3 // Детальний дебаг
         };
 
         // Додаємо порт тільки для локального середовища
