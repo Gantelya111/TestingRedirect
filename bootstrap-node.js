@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
-import { PeerServer } from 'peer';
+import { PeerServer } from 'peerjs-server';
 import { logger } from '@libp2p/logger';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -15,7 +15,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const HOST = '0.0.0.0';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
-const MAX_CACHE_SIZE = 500; // Зменшено для Render
+const MAX_CACHE_SIZE = 200; // Зменшено для Render
 const redirectsCache = new Map();
 
 function pruneCacheIfNeeded() {
@@ -30,11 +30,8 @@ function pruneCacheIfNeeded() {
 
 const app = express();
 const server = createServer(app);
-
-// Виправлення MaxListenersExceededWarning
 server.setMaxListeners(20);
 
-// Дебаг запитів
 app.use((req, res, next) => {
     debugLogger('INFO: Incoming request: %s %s', req.method, req.url);
     next();
@@ -47,7 +44,6 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Кореневий маршрут
 app.get('/', (req, res) => {
     debugLogger('INFO: Serving index.html for /');
     const indexPath = path.join(__dirname, 'public', 'index.html');
@@ -59,13 +55,11 @@ app.get('/', (req, res) => {
     });
 });
 
-// Тестовий ендпоінт
 app.get('/test', (req, res) => {
     debugLogger('INFO: Test endpoint');
     res.json({ status: 'ok', message: 'Server is running' });
 });
 
-// Інші маршрути
 app.get('/health', (req, res) => {
     debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
@@ -79,8 +73,8 @@ app.get('/port', (req, res) => {
 
 app.get('/peers', (req, res) => {
     try {
-        const clients = peerServer.getClients ? peerServer.getClients() : new Map();
-        const peers = Array.from(clients.keys());
+        const clients = peerServer._clients || new Map();
+        const peers = Object.keys(clients.peerjs || {});
         debugLogger('INFO: Returning peers: %o', peers);
         res.json(peers);
     } catch (err) {
@@ -160,33 +154,25 @@ app.get('/r/:shortCode', (req, res) => {
     }
 });
 
-// Статичні файли після маршрутів
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Налаштування PeerServer
 const peerServer = PeerServer({
     port: HTTP_PORT,
     path: '/peerjs-server',
     proxied: isProduction,
-    server,
-    debug: true,
-    generateClientId: () => `peer-${Math.random().toString(36).slice(2)}`
+    debug: true
 });
 
 peerServer.on('connection', (client) => {
-    debugLogger('INFO: Peer connected: %s', client.getId());
+    debugLogger('INFO: Peer connected: %s', client.id);
 });
 
 peerServer.on('disconnect', (client) => {
-    debugLogger('INFO: Peer disconnected: %s', client.getId());
+    debugLogger('INFO: Peer disconnected: %s', client.id);
 });
 
 peerServer.on('error', (err) => {
     debugLogger('ERROR: PeerServer error: %o', err);
-});
-
-peerServer.on('message', (client, message) => {
-    debugLogger('INFO: WebSocket message from %s: %o', client.getId(), message);
 });
 
 function startServer(port, host) {
