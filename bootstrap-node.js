@@ -29,13 +29,11 @@ server.setMaxListeners(15);
 
 // Налаштування PeerServer
 const peerServer = PeerServer({
-    port: HTTP_PORT, // Використовуємо той же порт, що й HTTP
     path: '/peerjs-server',
-    proxied: isProduction, // Для Cloudflare/Render
+    proxied: isProduction,
     ssl: isProduction ? {} : undefined,
-    server, // Передаємо HTTP-сервер
-    debug: true, // Включаємо дебаг
-    generateClientId: () => `peer-${Math.random().toString(36).slice(2)}`
+    server,
+    debug: true // Включаємо дебаг PeerServer
 });
 
 app.use(cors({
@@ -46,15 +44,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static('public'));
 
-// Дебаг WebSocket-запитів
-app.get('/peerjs-server', (req, res) => {
-    debugLogger('INFO: GET /peerjs-server accessed');
-    res.json({ name: 'PeerJS Server', status: 'running' });
-});
-
-// Ендпоінти
 app.get('/health', (req, res) => {
-    debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
 });
 
@@ -91,7 +81,6 @@ app.get('/redirects', (req, res) => {
 app.post('/redirects', (req, res) => {
     const { shortCode, destinationUrl, description, passwordHash } = req.body;
     if (!shortCode || !destinationUrl) {
-        debugLogger('ERROR: Missing shortCode or destinationUrl: %o', req.body);
         return res.status(400).json({ error: 'Missing shortCode or destinationUrl' });
     }
     const redirect = {
@@ -112,7 +101,6 @@ app.put('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     const { destinationUrl, description } = req.body;
     if (!redirectsCache.has(shortCode)) {
-        debugLogger('ERROR: Redirect not found: %s', shortCode);
         return res.status(404).json({ error: 'Redirect not found' });
     }
     const redirect = redirectsCache.get(shortCode);
@@ -127,7 +115,6 @@ app.put('/redirects/:shortCode', (req, res) => {
 app.delete('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     if (!redirectsCache.has(shortCode)) {
-        debugLogger('INFO: Redirect not found, skipping: %s', shortCode);
         return res.json({ success: true, message: 'Redirect not found' });
     }
     redirectsCache.delete(shortCode);
@@ -142,12 +129,10 @@ app.get('/r/:shortCode', (req, res) => {
         debugLogger('INFO: Redirecting %s to %s', shortCode, redirect.destinationUrl);
         res.redirect(redirect.destinationUrl);
     } else {
-        debugLogger('ERROR: Redirect not found: %s', shortCode);
         res.status(404).send('Redirect not found');
     }
 });
 
-// Події PeerServer
 peerServer.on('connection', (client) => {
     debugLogger('INFO: Peer connected: %s', client.getId());
 });
@@ -158,11 +143,6 @@ peerServer.on('disconnect', (client) => {
 
 peerServer.on('error', (err) => {
     debugLogger('ERROR: PeerServer error: %o', err);
-});
-
-// Додатковий дебаг WebSocket
-peerServer.on('message', (client, message) => {
-    debugLogger('INFO: WebSocket message from %s: %o', client.getId(), message);
 });
 
 function startServer(port, host) {
