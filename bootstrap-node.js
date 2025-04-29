@@ -47,13 +47,15 @@ app.use(express.json());
 
 // Статичні файли
 app.use(express.static(path.join(__dirname, 'public'), {
-    index: 'index.html' // Явно вказуємо index.html
+    index: 'index.html',
+    fallthrough: false // Запобігає помилкам
 }));
 
 // Явний маршрут для /
 app.get('/', (req, res) => {
     debugLogger('INFO: Serving index.html for /');
-    res.sendFile(path.join(__dirname, 'public', 'index.html'), (err) => {
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    res.sendFile(indexPath, (err) => {
         if (err) {
             debugLogger('ERROR: Failed to send index.html: %o', err);
             res.status(500).send('Failed to load index.html');
