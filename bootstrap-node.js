@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
-import { PeerServer } from 'peerjs-server';
+import { PeerServer } from 'peer';
 import { logger } from '@libp2p/logger';
 
 const debugLogger = logger('bootstrap-node');
@@ -25,24 +25,34 @@ function pruneCacheIfNeeded() {
 
 const app = express();
 const server = createServer(app);
+server.setMaxListeners(15);
 
-// Виправлення MaxListenersExceededWarning
-server.setMaxListeners(20);
-
-// Дебаг запитів
-app.use((req, res, next) => {
-    debugLogger('INFO: Incoming request: %s %s', req.method, req.url);
-    next();
+// Налаштування PeerServer
+const peerServer = PeerServer({
+    port: HTTP_PORT, // Використовуємо той же порт, що й HTTP
+    path: '/peerjs-server',
+    proxied: isProduction, // Для Cloudflare/Render
+    ssl: isProduction ? {} : undefined,
+    server, // Передаємо HTTP-сервер
+    debug: true, // Включаємо дебаг
+    generateClientId: () => `peer-${Math.random().toString(36).slice(2)}`
 });
 
 app.use(cors({
-    origin: ['https://libp2p.onrender.com', 'http://localhost:8080', 'http://localhost:3000'],
+    origin: ['https://libp2p.onrender.com', 'http://localhost:8080'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
+app.use(express.static('public'));
 
-// Маршрути перед express.static
+// Дебаг WebSocket-запитів
+app.get('/peerjs-server', (req, res) => {
+    debugLogger('INFO: GET /peerjs-server accessed');
+    res.json({ name: 'PeerJS Server', status: 'running' });
+});
+
+// Ендпоінти
 app.get('/health', (req, res) => {
     debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
@@ -137,17 +147,7 @@ app.get('/r/:shortCode', (req, res) => {
     }
 });
 
-// express.static після маршрутів
-app.use(express.static('public'));
-
-const peerServer = PeerServer({
-    port: HTTP_PORT,
-    path: '/peerjs-server',
-    proxied: isProduction,
-    server,
-    debug: true
-});
-
+// Події PeerServer
 peerServer.on('connection', (client) => {
     debugLogger('INFO: Peer connected: %s', client.getId());
 });
@@ -160,8 +160,12 @@ peerServer.on('error', (err) => {
     debugLogger('ERROR: PeerServer error: %o', err);
 });
 
+// Додатковий дебаг WebSocket
+peerServer.on('message', (client, message) => {
+    debugLogger('INFO: WebSocket message from %s: %o', client.getId(), message);
+});
+
 function startServer(port, host) {
-    // Очищення слухачів перед запуском
     server.removeAllListeners('listening');
     server.removeAllListeners('error');
 
@@ -172,7 +176,6 @@ function startServer(port, host) {
     });
 
     server.on('error', (err) => {
-        debugLogger('ERROR: Server failed to start: %o', err);
         if (err.code === 'EADDRINUSE') {
             debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
             setTimeout(() => {
@@ -180,18 +183,18 @@ function startServer(port, host) {
                 startServer(port, host);
             }, 5000);
         } else {
+            debugLogger('ERROR: Server error: %o', err);
             throw err;
         }
     });
+
+    server.on('listening', () => {
+        const addr = server.address();
+        debugLogger('INFO: Server listening on %s:%d', addr.address, addr.port);
+    });
 }
 
-try {
-    debugLogger('INFO: Starting server on port %d', HTTP_PORT);
-    startServer(HTTP_PORT, HOST);
-} catch (err) {
-    debugLogger('ERROR: Failed to start server: %o', err);
-    process.exit(1);
-}
+startServer(HTTP_PORT, HOST);
 
 process.on('SIGTERM', () => {
     debugLogger('INFO: Received SIGTERM, shutting down...');
