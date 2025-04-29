@@ -3,11 +3,6 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { PeerServer } from 'peer';
 import { logger } from '@libp2p/logger';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const debugLogger = logger('bootstrap-node');
 
@@ -15,7 +10,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const HOST = '0.0.0.0';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
-const MAX_CACHE_SIZE = 200; // Зменшуємо для стабільності
+const MAX_CACHE_SIZE = 1000;
 const redirectsCache = new Map();
 
 function pruneCacheIfNeeded() {
@@ -32,47 +27,24 @@ const app = express();
 const server = createServer(app);
 server.setMaxListeners(15);
 
-// Дебаг запитів
-app.use((req, res, next) => {
-    debugLogger('INFO: Incoming request: %s %s', req.method, req.url);
-    next();
-});
-
-app.use(cors({
-    origin: ['https://libp2p.onrender.com', 'http://localhost:8080', 'http://localhost:3000'],
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type']
-}));
-app.use(express.json());
-
-// Статичні файли
-app.use(express.static(path.join(__dirname, 'public'), {
-    index: 'index.html' // Явно вказуємо index.html
-}));
-
-// Явний маршрут для /
-app.get('/', (req, res) => {
-    debugLogger('INFO: Serving index.html for /');
-    const indexPath = path.join(__dirname, 'public', 'index.html');
-    res.sendFile(indexPath, (err) => {
-        if (err) {
-            debugLogger('ERROR: Failed to send index.html: %o', err);
-            res.status(500).send('Failed to load index.html');
-        }
-    });
-});
-
 // Налаштування PeerServer
 const peerServer = PeerServer({
     path: '/peerjs-server',
     proxied: isProduction,
-    port: HTTP_PORT, // Явно вказуємо порт
+    ssl: isProduction ? {} : undefined,
     server,
-    debug: true
+    debug: true // Включаємо дебаг PeerServer
 });
 
+app.use(cors({
+    origin: ['https://libp2p.onrender.com', 'http://localhost:8080'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type']
+}));
+app.use(express.json());
+app.use(express.static('public'));
+
 app.get('/health', (req, res) => {
-    debugLogger('INFO: Health check');
     res.json({ status: 'ok', peerServerRunning: true });
 });
 
@@ -109,7 +81,6 @@ app.get('/redirects', (req, res) => {
 app.post('/redirects', (req, res) => {
     const { shortCode, destinationUrl, description, passwordHash } = req.body;
     if (!shortCode || !destinationUrl) {
-        debugLogger('ERROR: Missing shortCode or destinationUrl: %o', req.body);
         return res.status(400).json({ error: 'Missing shortCode or destinationUrl' });
     }
     const redirect = {
@@ -130,7 +101,6 @@ app.put('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     const { destinationUrl, description } = req.body;
     if (!redirectsCache.has(shortCode)) {
-        debugLogger('ERROR: Redirect not found: %s', shortCode);
         return res.status(404).json({ error: 'Redirect not found' });
     }
     const redirect = redirectsCache.get(shortCode);
@@ -145,7 +115,6 @@ app.put('/redirects/:shortCode', (req, res) => {
 app.delete('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     if (!redirectsCache.has(shortCode)) {
-        debugLogger('INFO: Redirect not found: %s', shortCode);
         return res.json({ success: true, message: 'Redirect not found' });
     }
     redirectsCache.delete(shortCode);
@@ -160,13 +129,12 @@ app.get('/r/:shortCode', (req, res) => {
         debugLogger('INFO: Redirecting %s to %s', shortCode, redirect.destinationUrl);
         res.redirect(redirect.destinationUrl);
     } else {
-        debugLogger('ERROR: Redirect not found: %s', shortCode);
         res.status(404).send('Redirect not found');
     }
 });
 
 peerServer.on('connection', (client) => {
-    debugLogger('INFO: Peer connected: %s, details: %o', client.getId(), client);
+    debugLogger('INFO: Peer connected: %s', client.getId());
 });
 
 peerServer.on('disconnect', (client) => {
@@ -188,14 +156,14 @@ function startServer(port, host) {
     });
 
     server.on('error', (err) => {
-        debugLogger('ERROR: Server error: %o', err);
         if (err.code === 'EADDRINUSE') {
-            debugLogger('ERROR: Port %d in use, retrying in 5 seconds...', port);
+            debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
             setTimeout(() => {
                 server.close();
                 startServer(port, host);
             }, 5000);
         } else {
+            debugLogger('ERROR: Server error: %o', err);
             throw err;
         }
     });
