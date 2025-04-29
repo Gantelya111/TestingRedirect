@@ -3,13 +3,14 @@ import { fileURLToPath } from 'url';
 import webpack from 'webpack';
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer';
 import CopyWebpackPlugin from 'copy-webpack-plugin';
+import lodash from 'lodash';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default (env, argv) => {
     const mode = argv.mode || 'development';
-    return {
+    const config = {
         mode,
         entry: {
             'p2p-app': './src/p2p-app-src.js',
@@ -62,7 +63,7 @@ export default (env, argv) => {
                 https: 'https-browserify',
                 http: 'stream-http',
                 vm: 'vm-browserify',
-                process: 'process/browser.js', // Додано .js
+                process: 'process/browser.js',
                 dgram: false,
                 net: false,
                 tls: false,
@@ -70,12 +71,12 @@ export default (env, argv) => {
                 fs: false,
             },
             alias: {
-                'process/browser': 'process/browser.js', // Додано .js
+                'process/browser': 'process/browser.js',
             },
         },
         plugins: [
             new webpack.ProvidePlugin({
-                process: ['process/browser.js', 'default'], // Додано .js
+                process: ['process/browser.js', 'default'],
                 Buffer: ['buffer', 'Buffer'],
             }),
             new webpack.IgnorePlugin({
@@ -110,4 +111,6 @@ export default (env, argv) => {
         },
         target: 'web',
     };
+
+    return lodash.cloneDeep(config);
 };
