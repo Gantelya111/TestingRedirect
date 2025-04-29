@@ -1,0 +1,36 @@
+{
+  "scripts": {
+    "start": "node bootstrap-node.js",
+    "start:bootstrap": "node --max-old-space-size=512 bootstrap-node.js",
+    "build": "webpack --config webpack.config.js",
+    "build:debug": "webpack --config webpack.config.js --progress --verbose"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "@libp2p/logger": "^5.0.0",
+    "peer": "^1.0.2",
+    "peerjs": "^1.5.2",
+    "crypto-browserify": "^3.12.0",
+    "buffer": "^6.0.3",
+    "uint8arrays": "^5.1.0"
+  },
+  "devDependencies": {
+    "webpack": "^5.95.0",
+    "webpack-cli": "^5.1.4",
+    "babel-loader": "^9.2.1",
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.4",
+    "copy-webpack-plugin": "^12.0.2",
+    "process": "^0.11.10",
+    "stream-browserify": "^3.0.0",
+    "assert": "^2.1.0",
+    "util": "^0.12.5",
+    "url": "^0.11.4",
+    "path-browserify": "^1.0.1",
+    "os-browserify": "^0.3.0",
+    "https-browserify": "^1.0.0",
+    "stream-http": "^3.2.0",
+    "vm-browserify": "^1.1.2"
+  }
+}
