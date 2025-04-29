@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
-import { PeerServer } from 'peerjs-server';
+import { PeerServer } from 'peer';
 import { logger } from '@libp2p/logger';
 
 const debugLogger = logger('bootstrap-node');
