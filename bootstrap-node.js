@@ -3,6 +3,11 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { PeerServer } from 'peer';
 import { logger } from '@libp2p/logger';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const debugLogger = logger('bootstrap-node');
 
@@ -10,7 +15,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const HOST = '0.0.0.0';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
-const MAX_CACHE_SIZE = 500; // Зменшено для економії пам’яті
+const MAX_CACHE_SIZE = 500; // Зменшено для Render
 const redirectsCache = new Map();
 
 function pruneCacheIfNeeded() {
@@ -42,7 +47,13 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Маршрути Express
+// Кореневий маршрут
+app.get('/', (req, res) => {
+    debugLogger('INFO: Serving index.html for /');
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Інші маршрути
 app.get('/health', (req, res) => {
     debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
@@ -137,8 +148,8 @@ app.get('/r/:shortCode', (req, res) => {
     }
 });
 
-// express.static після маршрутів
-app.use(express.static('public'));
+// Статичні файли після маршрутів
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Налаштування PeerServer
 const peerServer = PeerServer({
@@ -167,7 +178,6 @@ peerServer.on('message', (client, message) => {
 });
 
 function startServer(port, host) {
-    // Очищення слухачів
     server.removeAllListeners('listening');
     server.removeAllListeners('error');
 
