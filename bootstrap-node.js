@@ -151,7 +151,7 @@ app.get('/r/:shortCode', (req, res) => {
 // Статичні файли після маршрутів
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Налаштування PeerServer
+// Налаштування PeerServer (з документації)
 const peerServer = PeerServer({
     port: HTTP_PORT,
     path: '/peerjs-server',
