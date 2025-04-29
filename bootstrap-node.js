@@ -50,7 +50,19 @@ app.use(express.json());
 // Кореневий маршрут
 app.get('/', (req, res) => {
     debugLogger('INFO: Serving index.html for /');
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    res.sendFile(indexPath, (err) => {
+        if (err) {
+            debugLogger('ERROR: Failed to send index.html: %o', err);
+            res.status(500).send('Failed to load index.html');
+        }
+    });
+});
+
+// Тестовий ендпоінт
+app.get('/test', (req, res) => {
+    debugLogger('INFO: Test endpoint');
+    res.json({ status: 'ok', message: 'Server is running' });
 });
 
 // Інші маршрути
@@ -151,7 +163,7 @@ app.get('/r/:shortCode', (req, res) => {
 // Статичні файли після маршрутів
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Налаштування PeerServer (з документації)
+// Налаштування PeerServer
 const peerServer = PeerServer({
     port: HTTP_PORT,
     path: '/peerjs-server',
