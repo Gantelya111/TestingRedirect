@@ -18,20 +18,21 @@ const debugLogger = console.log.bind(console, '[p2p-app]');
 const isProduction = process.env.NODE_ENV === 'production';
 const isBrowser = typeof window !== 'undefined';
 const isLocalhost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-const isHttps = isBrowser && window.location.protocol === 'https:';
+// const isHttps = isBrowser && window.location.protocol === 'https:'; // Старий підхід
+const secureConnection = !isLocalhost; // Новий підхід: завжди secure, якщо не localhost
 const BASE_URL = isLocalhost ? 'http://localhost:8080' : 'https://libp2p.onrender.com';
 
-debugLogger('INFO: Environment - Browser: %o, Localhost: %o, HTTPS: %o, BASE_URL: %s',
-    isBrowser, isLocalhost, isHttps, BASE_URL);
+debugLogger('INFO: Environment - Browser: %o, Localhost: %o, Secure: %o, BASE_URL: %s',
+    isBrowser, isLocalhost, secureConnection, BASE_URL);
 
-if (!isHttps && !isLocalhost) {
+if (!secureConnection && !isLocalhost) {
     debugLogger('WARN: Running on HTTP (not localhost). WebRTC may require HTTPS.');
 }
 
 let peer = null;
 const redirectsCache = new Map();
 const connections = new Map();
-const MAX_CACHE_SIZE = 200; // Зменшено для Render
+const MAX_CACHE_SIZE = 200;
 const MAX_CONNECTIONS = 50;
 let pollingIntervalId = null;
 let syncIntervalId = null;
@@ -102,9 +103,9 @@ async function startNodeInternal() {
     const peerConfig = {
         host: isLocalhost ? 'localhost' : 'libp2p.onrender.com',
         path: '/peerjs-server',
-        secure: isHttps,
+        secure: secureConnection, // Змінено тут
         debug: 3,
-        pingInterval: 5000
+        pingInterval: 15000 // Змінено тут
     };
 
     if (isLocalhost) {
@@ -116,10 +117,11 @@ async function startNodeInternal() {
                 debugLogger('INFO: Fetched port: %d', peerConfig.port);
             }
         } catch (err) {
-            debugLogger('WARN: Failed to fetch port, using 8080:', err);
+            debugLogger('WARN: Failed to fetch port, using 8080: %o', err);
             peerConfig.port = 8080;
         }
     } else {
+        // Для production/Render порт не вказуємо, PeerJS використає 443 для WSS
         delete peerConfig.port;
     }
 
@@ -239,7 +241,7 @@ function handleMessage(message) {
                         ...current,
                         ...redirect,
                         shortCode,
-                        passwordHash: current.passwordHash || redirect.passwordHash
+                        passwordHash: current.passwordHash || redirect.passwordHash // Зберігаємо хеш, якщо він є
                     });
                     pruneCacheIfNeeded();
                     saveRedirectsCacheToLocalStorage();
@@ -262,6 +264,7 @@ function handleMessage(message) {
                     description: redirect.description,
                     createdAt: redirect.createdAt,
                     updatedAt: redirect.updatedAt
+                    // Не надсилаємо passwordHash
                 };
                 const response = { action: 'get_response', shortCode, redirect: safeRedirect };
                 const conn = connections.get(message.from);
@@ -276,10 +279,12 @@ function handleMessage(message) {
             break;
         case 'get_response':
             if (redirect && redirect.destinationUrl) {
+                // Зберігаємо отриманий редірект, але зберігаємо існуючий passwordHash, якщо він є
+                const existing = redirectsCache.get(shortCode);
                 redirectsCache.set(shortCode, {
                     ...redirect,
                     shortCode,
-                    passwordHash: redirectsCache.get(shortCode)?.passwordHash
+                    passwordHash: existing?.passwordHash
                 });
                 pruneCacheIfNeeded();
                 saveRedirectsCacheToLocalStorage();
@@ -313,7 +318,9 @@ async function syncRedirectsViaPolling() {
         }
         redirects.forEach(r => {
             if (r.shortCode && r.destinationUrl) {
-                redirectsCache.set(r.shortCode, r);
+                // Оновлюємо, зберігаючи існуючий passwordHash, якщо є
+                const existing = redirectsCache.get(r.shortCode);
+                redirectsCache.set(r.shortCode, { ...r, passwordHash: existing?.passwordHash || r.passwordHash });
             }
         });
         pruneCacheIfNeeded();
@@ -338,7 +345,8 @@ function broadcastMessage(message) {
     for (const [peerId, conn] of connections) {
         try {
             conn.send(JSON.stringify(message));
-            debugLogger('INFO: Sent to:', peerId, message);
+            // Не логуємо кожне повідомлення, щоб уникнути заспамлення
+            // debugLogger('INFO: Sent to:', peerId, message);
         } catch (err) {
             debugLogger('ERROR: Failed to send to:', peerId, err);
         }
@@ -357,21 +365,21 @@ function updateP2PStatus(status, isError = false) {
 function startPolling() {
     if (pollingIntervalId) clearInterval(pollingIntervalId);
     debugLogger('INFO: Starting polling');
-    syncRedirectsViaPolling();
-    pollingIntervalId = setInterval(syncRedirectsViaPolling, 10 * 1000); // Збільшено інтервал
+    syncRedirectsViaPolling(); // Запускаємо відразу
+    pollingIntervalId = setInterval(syncRedirectsViaPolling, 30 * 1000); // Збільшено інтервал до 30 сек
 }
 
 function startSync() {
     if (syncIntervalId) clearInterval(syncIntervalId);
-    syncRedirects();
-    syncIntervalId = setInterval(syncRedirects, 15 * 60 * 1000); // Збільшено інтервал
+    syncRedirects(); // Запускаємо відразу
+    syncIntervalId = setInterval(syncRedirects, 10 * 60 * 1000); // Інтервал 10 хвилин
 }
 
 function startRepublishing() {
     if (republishIntervalId) clearInterval(republishIntervalId);
     debugLogger('INFO: Starting republishing');
-    republishActiveRedirects();
-    republishIntervalId = setInterval(republishActiveRedirects, 15 * 60 * 1000); // Збільшено інтервал
+    republishActiveRedirects(); // Запускаємо відразу
+    republishIntervalId = setInterval(republishActiveRedirects, 15 * 60 * 1000); // Інтервал 15 хвилин
 }
 
 function republishActiveRedirects() {
@@ -382,6 +390,7 @@ function republishActiveRedirects() {
             description: redirect.description,
             createdAt: redirect.createdAt,
             updatedAt: redirect.updatedAt
+            // Не надсилаємо passwordHash
         };
         const message = { action: 'create', shortCode, redirect: safeRedirect };
         broadcastMessage(message);
@@ -396,10 +405,10 @@ async function createRedirect(url, description = '') {
 
     updateP2PStatus('Generating code...');
     let shortCode;
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 15; i++) { // До 15 спроб генерації
         shortCode = await generateShortCode(url + Date.now() + Math.random());
         if (!redirectsCache.has(shortCode)) break;
-        if (i === 14) throw new Error('Failed to generate unique shortCode');
+        if (i === 14) throw new Error('Failed to generate unique shortCode after 15 attempts');
     }
 
     updateP2PStatus('Creating redirect...');
@@ -415,11 +424,13 @@ async function createRedirect(url, description = '') {
         updatedAt: Date.now()
     };
 
+    // Спробуємо спочатку через HTTP, якщо невдача - не страшно, P2P має спрацювати
     try {
         const response = await fetch(`${BASE_URL}/redirects`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(redirect)
+            body: JSON.stringify(redirect), // Надсилаємо повний об'єкт з хешем
+            signal: AbortSignal.timeout(5000)
         });
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
         redirectsCache.set(shortCode, redirect);
@@ -427,14 +438,15 @@ async function createRedirect(url, description = '') {
         saveRedirectsCacheToLocalStorage();
         debugLogger('INFO: Created redirect via HTTP:', shortCode);
     } catch (err) {
-        debugLogger('ERROR: Failed to create redirect via HTTP:', err);
+        debugLogger('WARN: Failed to create redirect via HTTP (will rely on P2P):', err);
     }
 
+    // У будь-якому випадку оновлюємо кеш і розсилаємо через P2P
+    redirectsCache.set(shortCode, redirect);
+    pruneCacheIfNeeded();
+    saveRedirectsCacheToLocalStorage();
     if (peer && peer.open) {
-        redirectsCache.set(shortCode, redirect);
-        pruneCacheIfNeeded();
-        saveRedirectsCacheToLocalStorage();
-        const safeRedirect = {
+        const safeRedirect = { // Надсилаємо без хешу
             destinationUrl: redirect.destinationUrl,
             description: redirect.description,
             createdAt: redirect.createdAt,
@@ -444,8 +456,9 @@ async function createRedirect(url, description = '') {
     }
 
     updateP2PStatus('Redirect created');
-    return { shortCode, password };
+    return { shortCode, password }; // Повертаємо пароль для показу користувачу
 }
+
 
 async function getRedirect(shortCode) {
     debugLogger('INFO: Getting redirect:', shortCode);
@@ -454,55 +467,77 @@ async function getRedirect(shortCode) {
         return redirectsCache.get(shortCode);
     }
 
+    // Спробуємо отримати через HTTP (там має бути весь список)
     try {
         const response = await fetch(`${BASE_URL}/redirects`, { signal: AbortSignal.timeout(5000) });
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
         const redirects = await response.json();
         const redirect = redirects.find(r => r.shortCode === shortCode);
         if (redirect) {
-            redirectsCache.set(shortCode, redirect);
+             // Зберігаємо отриманий редірект, але зберігаємо існуючий passwordHash, якщо він є
+            const existing = redirectsCache.get(shortCode);
+            redirectsCache.set(shortCode, {
+                ...redirect,
+                passwordHash: existing?.passwordHash || redirect.passwordHash // Зберігаємо хеш, якщо є
+            });
             pruneCacheIfNeeded();
             saveRedirectsCacheToLocalStorage();
             updateP2PStatus(`Redirect ${shortCode} found via server`);
-            return redirect;
+            return redirectsCache.get(shortCode);
         }
     } catch (err) {
-        debugLogger('ERROR: Failed to get redirect via HTTP:', err);
+        debugLogger('WARN: Failed to get redirect via HTTP (will try P2P):', err);
     }
 
+    // Якщо HTTP не дав результату, запитуємо мережу P2P
     if (peer && peer.open) {
         updateP2PStatus(`Querying network for ${shortCode}...`);
         const message = { action: 'get', shortCode, from: peer.id };
         broadcastMessage(message);
 
+        // Чекаємо відповіді від мережі
         return new Promise((resolve) => {
             const timeout = setTimeout(() => {
-                updateP2PStatus(`Redirect ${shortCode} not found`, true);
-                resolve(null);
-            }, 5000);
+                updateP2PStatus(`Redirect ${shortCode} not found in network`, true);
+                resolve(null); // Не знайдено
+            }, 5000); // Таймаут очікування відповіді
 
             const handler = (data) => {
                 try {
                     const msg = JSON.parse(data);
-                    if (msg.action === 'get_response' && msg.shortCode === shortCode) {
+                    if (msg.action === 'get_response' && msg.shortCode === shortCode && msg.redirect) {
                         clearTimeout(timeout);
-                        resolve(redirectsCache.get(shortCode));
+                         // Зберігаємо отриманий редірект, але зберігаємо існуючий passwordHash, якщо він є
+                        const existing = redirectsCache.get(shortCode);
+                        redirectsCache.set(shortCode, {
+                            ...msg.redirect,
+                            shortCode,
+                            passwordHash: existing?.passwordHash // Важливо: не перезаписуємо хеш!
+                        });
+                        pruneCacheIfNeeded();
+                        saveRedirectsCacheToLocalStorage();
+                        updateP2PStatus(`Redirect ${shortCode} received from peer`);
+                        resolve(redirectsCache.get(shortCode)); // Повертаємо з кешу
+                        // Видаляємо обробник після отримання відповіді
+                        for (const [, conn] of connections) {
+                            conn.off('data', handler);
+                        }
                     }
                 } catch (err) {
                     debugLogger('ERROR: Failed to parse get_response:', err);
                 }
             };
-
+            // Навішуємо тимчасовий обробник на всі з'єднання
             for (const [, conn] of connections) {
-                conn.removeAllListeners('data');
                 conn.on('data', handler);
             }
         });
     }
 
     updateP2PStatus(`Redirect ${shortCode} not found`, true);
-    return null;
+    return null; // Не знайдено ніде
 }
+
 
 async function updateRedirect(shortCode, newUrl, newDescription, redirectPassword) {
     debugLogger('INFO: Updating redirect:', shortCode, newUrl, newDescription);
@@ -511,48 +546,55 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
     }
 
     updateP2PStatus(`Updating ${shortCode}...`);
-    const stored = await getRedirect(shortCode);
-    if (!stored) {
-        updateP2PStatus(`Update failed: Redirect ${shortCode} not found`, true);
-        throw new Error('Redirect not found');
+    // Спочатку отримуємо локальний/кешований запис, щоб перевірити пароль
+    const stored = redirectsCache.get(shortCode) || await getRedirect(shortCode); // Спробуємо отримати, якщо немає в кеші
+    if (!stored || !stored.passwordHash) { // Перевіряємо наявність хешу
+        updateP2PStatus(`Update failed: Redirect ${shortCode} not found or no password hash available`, true);
+        throw new Error('Redirect not found or password verification impossible');
     }
 
+    // Перевіряємо пароль
     const isValidPassword = await verifyRedirectPassword(redirectPassword, stored.passwordHash);
     if (!isValidPassword) {
-        updateP2PStatus(`Update failed: Incorrect password`, true);
+        updateP2PStatus(`Update failed: Incorrect password for ${shortCode}`, true);
         throw new Error('Incorrect password');
     }
 
+    // Пароль вірний, готуємо оновлення
     const updatedRedirect = {
-        ...stored,
+        ...stored, // Беремо за основу існуючий запис (включаючи хеш)
         destinationUrl: newUrl,
         description: newDescription !== undefined ? newDescription : stored.description,
-        updatedAt: Date.now()
+        updatedAt: Date.now() // Оновлюємо час
     };
 
+    // Спробуємо оновити через HTTP
     try {
         const response = await fetch(`${BASE_URL}/redirects/${shortCode}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ destinationUrl: newUrl, description: newDescription })
+            // Не надсилаємо пароль чи хеш в PUT запиті, тільки дані для оновлення
+            body: JSON.stringify({ destinationUrl: newUrl, description: newDescription }),
+            signal: AbortSignal.timeout(5000)
         });
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-        redirectsCache.set(shortCode, updatedRedirect);
+        redirectsCache.set(shortCode, updatedRedirect); // Оновлюємо локальний кеш
         pruneCacheIfNeeded();
         saveRedirectsCacheToLocalStorage();
         debugLogger('INFO: Updated redirect via HTTP:', shortCode);
     } catch (err) {
-        debugLogger('ERROR: Failed to update redirect via HTTP:', err);
+        debugLogger('WARN: Failed to update redirect via HTTP (will rely on P2P):', err);
     }
 
+    // У будь-якому випадку оновлюємо кеш і розсилаємо через P2P
+    redirectsCache.set(shortCode, updatedRedirect);
+    pruneCacheIfNeeded();
+    saveRedirectsCacheToLocalStorage();
     if (peer && peer.open) {
-        redirectsCache.set(shortCode, updatedRedirect);
-        pruneCacheIfNeeded();
-        saveRedirectsCacheToLocalStorage();
-        const safeRedirect = {
+        const safeRedirect = { // Надсилаємо без хешу
             destinationUrl: updatedRedirect.destinationUrl,
             description: updatedRedirect.description,
-            updatedAt: updatedRedirect.updatedAt
+            updatedAt: updatedRedirect.updatedAt // Надсилаємо оновлений час
         };
         broadcastMessage({ action: 'update', shortCode, redirect: safeRedirect });
     }
@@ -561,34 +603,50 @@ async function updateRedirect(shortCode, newUrl, newDescription, redirectPasswor
     return { success: true };
 }
 
+
 async function deleteRedirect(shortCode, redirectPassword) {
     debugLogger('INFO: Deleting redirect:', shortCode);
     updateP2PStatus(`Deleting ${shortCode}...`);
-    const stored = redirectsCache.get(shortCode) || await getRedirect(shortCode);
+    // Спочатку отримуємо локальний/кешований запис, щоб перевірити пароль
+    const stored = redirectsCache.get(shortCode) || await getRedirect(shortCode); // Спробуємо отримати, якщо немає в кеші
     if (!stored) {
-        updateP2PStatus(`Redirect ${shortCode} not found`);
+        // Якщо редіректу взагалі немає, вважаємо видалення успішним (нічого видаляти)
+        updateP2PStatus(`Redirect ${shortCode} not found, nothing to delete`);
         return { success: true, message: 'Redirect not found' };
     }
 
+    if (!stored.passwordHash) {
+        updateP2PStatus(`Deletion failed: Password hash for ${shortCode} is missing`, true);
+        throw new Error('Password verification impossible, hash missing');
+    }
+
+    // Перевіряємо пароль
     const isValidPassword = await verifyRedirectPassword(redirectPassword, stored.passwordHash);
     if (!isValidPassword) {
-        updateP2PStatus(`Deletion failed: Incorrect password`, true);
+        updateP2PStatus(`Deletion failed: Incorrect password for ${shortCode}`, true);
         throw new Error('Incorrect password');
     }
 
+    // Пароль вірний, видаляємо
+    // Спробуємо видалити через HTTP
     try {
-        const response = await fetch(`${BASE_URL}/redirects/${shortCode}`, { method: 'DELETE' });
+        const response = await fetch(`${BASE_URL}/redirects/${shortCode}`, {
+             method: 'DELETE',
+             signal: AbortSignal.timeout(5000)
+        });
+        // Ігноруємо 404 помилку, бо це означає, що на сервері його вже немає
         if (!response.ok && response.status !== 404) throw new Error(`HTTP error: ${response.status}`);
-        redirectsCache.delete(shortCode);
+        redirectsCache.delete(shortCode); // Видаляємо з локального кешу
         saveRedirectsCacheToLocalStorage();
-        debugLogger('INFO: Deleted redirect via HTTP:', shortCode);
+        debugLogger('INFO: Deleted redirect via HTTP (or confirmed deletion):', shortCode);
     } catch (err) {
-        debugLogger('ERROR: Failed to delete redirect via HTTP:', err);
+        debugLogger('WARN: Failed to delete redirect via HTTP (will rely on P2P):', err);
     }
 
+    // У будь-якому випадку видаляємо з кешу і розсилаємо через P2P
+    redirectsCache.delete(shortCode);
+    saveRedirectsCacheToLocalStorage();
     if (peer && peer.open) {
-        redirectsCache.delete(shortCode);
-        saveRedirectsCacheToLocalStorage();
         broadcastMessage({ action: 'delete', shortCode });
     }
 
@@ -596,19 +654,23 @@ async function deleteRedirect(shortCode, redirectPassword) {
     return { success: true };
 }
 
+
 function getLocalRedirects(searchQuery = '') {
     debugLogger('INFO: Getting local redirects:', searchQuery);
     const query = searchQuery.toLowerCase().trim();
-    const allCached = Array.from(redirectsCache.values());
+    const allCached = Array.from(redirectsCache.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); // Сортуємо за часом оновлення
 
     if (!query) return allCached;
 
+    // Фільтруємо за запитом
     return allCached.filter(r =>
         (r.shortCode && r.shortCode.toLowerCase().includes(query)) ||
         (r.description && r.description.toLowerCase().includes(query)) ||
         (r.destinationUrl && r.destinationUrl.toLowerCase().includes(query))
     );
 }
+
+// --- Функції для паролів та хешування ---
 
 function generatePassword(length = 12) {
     const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -620,6 +682,7 @@ function generatePassword(length = 12) {
             password += charset[values[i] % charset.length];
         }
     } else {
+        // Fallback для середовищ без crypto.getRandomValues (малоймовірно в сучасних браузерах)
         for (let i = 0; i < length; i++) {
             password += charset.charAt(Math.floor(Math.random() * charset.length));
         }
@@ -629,54 +692,64 @@ function generatePassword(length = 12) {
 }
 
 function generateSalt(length = 16) {
+    let salt = '';
     if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.getRandomValues) {
         const values = new Uint8Array(length);
         globalThis.crypto.getRandomValues(values);
-        return Array.from(values, byte => byte.toString(16).padStart(2, '0')).join('');
-    }
-    let salt = '';
-    for (let i = 0; i < length * 2; i++) {
-        salt += Math.floor(Math.random() * 16).toString(16);
+        salt = Array.from(values, byte => byte.toString(16).padStart(2, '0')).join('');
+    } else {
+        // Fallback
+        for (let i = 0; i < length * 2; i++) { // length * 2 бо кожен байт це 2 hex символи
+            salt += Math.floor(Math.random() * 16).toString(16);
+        }
     }
     debugLogger('INFO: Generated salt');
     return salt;
 }
 
 async function hashPassword(password, salt = null) {
-    const currentSalt = salt || generateSalt();
+    const currentSalt = salt || generateSalt(); // Генеруємо сіль, якщо не надана
     const encoder = new TextEncoder();
-    const data = encoder.encode(password + currentSalt);
-    const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', data);
+    const data = encoder.encode(password + currentSalt); // Комбінуємо пароль та сіль
+    const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', data); // Хешуємо
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    return `${currentSalt}:${hashHex}`;
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join(''); // Перетворюємо в hex
+    return `${currentSalt}:${hashHex}`; // Повертаємо у форматі salt:hash
 }
 
 async function verifyRedirectPassword(providedPassword, storedSaltAndHash) {
     if (!providedPassword || !storedSaltAndHash || !storedSaltAndHash.includes(':')) {
-        debugLogger('WARN: Invalid password or hash');
-        return false;
+        debugLogger('WARN: Invalid password or hash format for verification');
+        return false; // Неправильний формат
     }
     const [salt, storedHash] = storedSaltAndHash.split(':');
+    // Хешуємо наданий пароль з тією ж сіллю
     const providedHashWithStoredSalt = await hashPassword(providedPassword, salt);
+    // Порівнюємо повний рядок salt:hash
     return providedHashWithStoredSalt === storedSaltAndHash;
 }
+
+// --- Функція для генерації ShortCode ---
 
 async function generateShortCode(inputString) {
     const encoder = new TextEncoder();
     const data = encoder.encode(inputString);
     const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    return hashHex.slice(0, 10);
+    // Використовуємо Base64 URL-safe кодування для коротшого та URL-дружнього коду
+    const base64 = Buffer.from(hashArray).toString('base64url');
+    return base64.slice(0, 8); // Беремо перші 8 символів
 }
+
+// --- Debug інструменти ---
 
 window.debugNodeStatus = () => {
     console.log('Node Status:', {
         initialized: !!peer,
         peerId: peer?.id || 'unknown',
         connections: Array.from(connections.keys()),
-        cacheSize: redirectsCache.size
+        cacheSize: redirectsCache.size,
+        localStorageSize: localStorage.getItem('redirectsCache')?.length || 0
     });
 };
 
@@ -685,32 +758,46 @@ window.testP2P = {
     getStatus: () => window.debugNodeStatus(),
     discoverPeers: async () => {
         const peers = await fetchKnownPeers();
+        let connectedCount = 0;
         for (const peerId of peers) {
             if (peerId !== peer.id && !connections.has(peerId) && connections.size < MAX_CONNECTIONS) {
                 try {
+                    debugLogger('INFO: Attempting to connect to discovered peer:', peerId);
                     const conn = peer.connect(peerId);
                     setupConnection(conn);
+                    connectedCount++;
                 } catch (err) {
                     console.error(`Failed to connect to ${peerId}:`, err);
                 }
             }
         }
-    }
+        debugLogger('INFO: Attempted to connect to %d new peers', connectedCount);
+    },
+    getCache: () => Object.fromEntries(redirectsCache)
 };
 
-const startNodePromise = startNodeInternal();
+// --- Запуск вузла ---
+
+const startNodePromise = startNodeInternal(); // Запускаємо асинхронно
+
+// --- Функція зупинки ---
 
 async function stopNode() {
     if (peer) {
-        peer.destroy();
+        peer.destroy(); // Знищуємо PeerJS об'єкт
         peer = null;
-        connections.clear();
-        redirectsCache.clear();
-        localStorage.removeItem('redirectsCache');
-        clearOldRedirectData();
+        connections.clear(); // Очищуємо мапу з'єднань
+        redirectsCache.clear(); // Очищуємо кеш
+        localStorage.removeItem('redirectsCache'); // Видаляємо з localStorage
+        clearOldRedirectData(); // Очищуємо старі дані (якщо є)
+        // Зупиняємо інтервали
         if (pollingIntervalId) clearInterval(pollingIntervalId);
         if (syncIntervalId) clearInterval(syncIntervalId);
         if (republishIntervalId) clearInterval(republishIntervalId);
+        pollingIntervalId = null;
+        syncIntervalId = null;
+        republishIntervalId = null;
         updateP2PStatus('Stopped');
+        debugLogger('INFO: P2P Node stopped');
     }
 }
