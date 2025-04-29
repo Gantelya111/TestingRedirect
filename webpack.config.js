@@ -62,7 +62,7 @@ export default (env, argv) => {
                 https: 'https-browserify',
                 http: 'stream-http',
                 vm: 'vm-browserify',
-                process: 'process/browser.js',
+                process: 'process/browser',
                 dgram: false,
                 net: false,
                 tls: false,
@@ -70,13 +70,12 @@ export default (env, argv) => {
                 fs: false,
             },
             alias: {
-                'node:crypto': 'crypto-browserify',
-                'process/browser': 'process/browser.js',
+                'process/browser': 'process/browser',
             },
         },
         plugins: [
             new webpack.ProvidePlugin({
-                process: ['process/browser.js', 'default'],
+                process: ['process/browser', 'default'],
                 Buffer: ['buffer', 'Buffer'],
             }),
             new webpack.IgnorePlugin({
@@ -84,8 +83,6 @@ export default (env, argv) => {
             }),
             new webpack.DefinePlugin({
                 'process.env.NODE_ENV': JSON.stringify(mode),
-                'process.env.PORT': JSON.stringify('8080'),
-                'process.env.BOOTSTRAP_PORT': JSON.stringify('443'),
                 'process.browser': JSON.stringify(true),
             }),
             new BundleAnalyzerPlugin({
