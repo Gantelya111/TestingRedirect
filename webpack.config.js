@@ -49,7 +49,7 @@ export default (env, argv) => {
             ],
         },
         resolve: {
-            extensions: ['.js'],
+            extensions: ['.js', '.mjs'],
             fallback: {
                 crypto: 'crypto-browserify',
                 stream: 'stream-browserify',
@@ -62,7 +62,7 @@ export default (env, argv) => {
                 https: 'https-browserify',
                 http: 'stream-http',
                 vm: 'vm-browserify',
-                process: 'process/browser',
+                process: 'process/browser.js', // Додано .js
                 dgram: false,
                 net: false,
                 tls: false,
@@ -70,12 +70,12 @@ export default (env, argv) => {
                 fs: false,
             },
             alias: {
-                'process/browser': 'process/browser',
+                'process/browser': 'process/browser.js', // Додано .js
             },
         },
         plugins: [
             new webpack.ProvidePlugin({
-                process: ['process/browser', 'default'],
+                process: ['process/browser.js', 'default'], // Додано .js
                 Buffer: ['buffer', 'Buffer'],
             }),
             new webpack.IgnorePlugin({
