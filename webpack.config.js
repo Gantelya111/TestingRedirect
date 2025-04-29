@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default {
-    mode: 'development',
+    mode: process.env.NODE_ENV || 'production', // Використовуємо production на Render
     entry: {
         'p2p-app': './src/p2p-app-src.js',
         'manager': './src/manager-src.js',
@@ -18,7 +18,7 @@ export default {
         filename: '[name].js',
         path: path.resolve(__dirname, 'public'),
         publicPath: '/',
-        clean: true
+        clean: true // Залишаємо, але перевіримо файли
     },
     module: {
         rules: [
@@ -74,17 +74,17 @@ export default {
             resourceRegExp: /^(dgram|net|tls|dns|fs)$/
         }),
         new webpack.DefinePlugin({
-            'process.env.NODE_ENV': JSON.stringify('development'),
+            'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'production'),
             'process.browser': JSON.stringify(true)
         }),
         new CopyWebpackPlugin({
             patterns: [
-                { from: 'src/html', to: '.' },
+                { from: 'src/html/index.html', to: 'index.html' }, // Явно копіюємо index.html
                 { from: 'src/html/favicon.ico', to: 'favicon.ico' }
             ]
         })
     ],
-    devtool: 'eval-source-map',
+    devtool: process.env.NODE_ENV === 'development' ? 'eval-source-map' : 'source-map',
     performance: {
         hints: false,
         maxAssetSize: 1000000,
