@@ -118,8 +118,9 @@ async function initializeManager() {
     console.log('DEBUG: Starting P2P synchronization');
     let isNetworkConnected = false;
     try {
+        console.log('DEBUG: Waiting for P2P node initialization');
         await startNodePromise;
-        console.log('DEBUG: P2P node initialized');
+        console.log('DEBUG: P2P node initialized successfully');
         isNetworkConnected = true;
         p2pStatusDiv.textContent = 'P2P Status: Connected';
     } catch (err) {
@@ -132,7 +133,7 @@ async function initializeManager() {
     try {
         await loadRedirects(redirectsBody);
         if (isNetworkConnected) {
-            setInterval(() => loadRedirects(redirectsBody), 5000); // Оновлення кожні 5 секунд
+            setInterval(() => loadRedirects(redirectsBody), 5000);
         }
     } catch (err) {
         console.error('DEBUG: Error loading initial redirects:', err);
@@ -160,7 +161,7 @@ async function initializeManager() {
         }
     }
 
-    // Додаємо обробники подій тільки якщо аутентифіковано
+    // Додаємо обробники подій
     if (isAuthenticated) {
         console.log('DEBUG: Attaching event listeners');
         addForm.addEventListener("submit", async (e) => {
@@ -192,7 +193,6 @@ async function initializeManager() {
             }
         });
 
-        // Обробник для кнопок видалення
         redirectsBody.addEventListener("click", async (e) => {
             if (e.target.classList.contains("delete-btn")) {
                 console.log('DEBUG: Handling delete button click');
@@ -215,7 +215,7 @@ async function initializeManager() {
     }
 }
 
-// Експортуємо функції для використання в інших модулях
+// Експортуємо функції
 export {
     verifyManagerPassword,
     initializeManager
