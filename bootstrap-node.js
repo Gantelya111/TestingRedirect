@@ -54,7 +54,7 @@ app.get('/r/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     const redirect = db.prepare('SELECT destination_url FROM redirects WHERE short_code = ?').get(shortCode);
     if (redirect) {
-        resа res.redirect(redirect.destination_url);
+        res.redirect(redirect.destination_url); // Виправлено: прибрано "resа"
     } else {
         res.status(404).send('Redirect not found');
     }
