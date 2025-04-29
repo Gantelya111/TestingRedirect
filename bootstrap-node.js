@@ -29,30 +29,28 @@ server.setMaxListeners(15);
 
 // Налаштування PeerServer
 const peerServer = PeerServer({
-    port: HTTP_PORT, // Використовуємо той же порт, що й HTTP
+    port: HTTP_PORT,
     path: '/peerjs-server',
-    proxied: isProduction, // Для Cloudflare/Render
-    ssl: isProduction ? {} : undefined,
-    server, // Передаємо HTTP-сервер
-    debug: true, // Включаємо дебаг
+    proxied: isProduction,
+    server,
+    debug: true,
     generateClientId: () => `peer-${Math.random().toString(36).slice(2)}`
 });
 
 app.use(cors({
-    origin: ['https://libp2p.onrender.com', 'http://localhost:8080'],
+    origin: ['https://libp2p.onrender.com', 'http://localhost:8080', 'http://localhost:3000'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
 app.use(express.static('public'));
 
-// Дебаг WebSocket-запитів
+// Дебаг-ендпоінт для перевірки
 app.get('/peerjs-server', (req, res) => {
     debugLogger('INFO: GET /peerjs-server accessed');
-    res.json({ name: 'PeerJS Server', status: 'running' });
+    res.json({ name: 'PeerJS Server', status: 'running', version: 'peer@1.0.2' });
 });
 
-// Ендпоінти
 app.get('/health', (req, res) => {
     debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
@@ -147,7 +145,6 @@ app.get('/r/:shortCode', (req, res) => {
     }
 });
 
-// Події PeerServer
 peerServer.on('connection', (client) => {
     debugLogger('INFO: Peer connected: %s', client.getId());
 });
@@ -160,7 +157,6 @@ peerServer.on('error', (err) => {
     debugLogger('ERROR: PeerServer error: %o', err);
 });
 
-// Додатковий дебаг WebSocket
 peerServer.on('message', (client, message) => {
     debugLogger('INFO: WebSocket message from %s: %o', client.getId(), message);
 });
@@ -176,6 +172,7 @@ function startServer(port, host) {
     });
 
     server.on('error', (err) => {
+        debugLogger('ERROR: Server failed to start: %o', err);
         if (err.code === 'EADDRINUSE') {
             debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
             setTimeout(() => {
@@ -183,7 +180,6 @@ function startServer(port, host) {
                 startServer(port, host);
             }, 5000);
         } else {
-            debugLogger('ERROR: Server error: %o', err);
             throw err;
         }
     });
@@ -194,7 +190,12 @@ function startServer(port, host) {
     });
 }
 
-startServer(HTTP_PORT, HOST);
+try {
+    startServer(HTTP_PORT, HOST);
+} catch (err) {
+    debugLogger('ERROR: Failed to start server: %o', err);
+    process.exit(1);
+}
 
 process.on('SIGTERM', () => {
     debugLogger('INFO: Received SIGTERM, shutting down...');
