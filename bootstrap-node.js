@@ -10,11 +10,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const debugLogger = logger('bootstrap-node');
+
 const isProduction = process.env.NODE_ENV === 'production';
 const HOST = '0.0.0.0';
 const HTTP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
-const MAX_CACHE_SIZE = 100; // Зменшено
 
+const MAX_CACHE_SIZE = 100; // Зменшено для Render
 const redirectsCache = new Map();
 
 function pruneCacheIfNeeded() {
@@ -29,10 +30,13 @@ function pruneCacheIfNeeded() {
 
 const app = express();
 const server = createServer(app);
+
+// Фікс MaxListenersExceededWarning
 server.setMaxListeners(20);
 
+// Дебаг запитів
 app.use((req, res, next) => {
-    debugLogger('INFO: Request: %s %s', req.method, req.url);
+    debugLogger('INFO: Incoming request: %s %s', req.method, req.url);
     next();
 });
 
@@ -43,30 +47,33 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Кореневий маршрут
 app.get('/', (req, res) => {
-    debugLogger('INFO: Serving index.html');
+    debugLogger('INFO: Serving index.html for /');
     const indexPath = path.join(__dirname, 'public', 'index.html');
     res.sendFile(indexPath, (err) => {
         if (err) {
-            debugLogger('ERROR: Failed to send index.html:', err);
+            debugLogger('ERROR: Failed to send index.html: %o', err);
             res.status(500).send('Failed to load index.html');
         }
     });
 });
 
+// Тестовий ендпоінт
 app.get('/test', (req, res) => {
     debugLogger('INFO: Test endpoint');
     res.json({ status: 'ok', message: 'Server is running' });
 });
 
+// Інші маршрути
 app.get('/health', (req, res) => {
-    debugLogger('INFO: Health check');
+    debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
 });
 
 app.get('/port', (req, res) => {
     const port = server.address()?.port || HTTP_PORT;
-    debugLogger('INFO: Port:', port);
+    debugLogger('INFO: Returning active port: %d', port);
     res.json({ port });
 });
 
@@ -74,10 +81,10 @@ app.get('/peers', (req, res) => {
     try {
         const clients = peerServer._clients || new Map();
         const peers = Object.keys(clients.peerjs || {});
-        debugLogger('INFO: Peers:', peers);
+        debugLogger('INFO: Returning peers: %o', peers);
         res.json(peers);
     } catch (err) {
-        debugLogger('ERROR: Failed to get peers:', err);
+        debugLogger('ERROR: Failed to get peers: %o', err);
         res.status(500).json({ error: 'Failed to get peers' });
     }
 });
@@ -90,14 +97,14 @@ app.get('/redirects', (req, res) => {
         createdAt: redirect.createdAt,
         updatedAt: redirect.updatedAt
     }));
-    debugLogger('INFO: Redirects:', redirects);
+    debugLogger('INFO: Returning redirects: %o', redirects);
     res.json(redirects);
 });
 
 app.post('/redirects', (req, res) => {
     const { shortCode, destinationUrl, description, passwordHash } = req.body;
     if (!shortCode || !destinationUrl) {
-        debugLogger('ERROR: Missing shortCode or destinationUrl:', req.body);
+        debugLogger('ERROR: Missing shortCode or destinationUrl: %o', req.body);
         return res.status(400).json({ error: 'Missing shortCode or destinationUrl' });
     }
     const redirect = {
@@ -110,7 +117,7 @@ app.post('/redirects', (req, res) => {
     };
     redirectsCache.set(shortCode, redirect);
     pruneCacheIfNeeded();
-    debugLogger('INFO: Created redirect:', shortCode);
+    debugLogger('INFO: Created redirect: %s', shortCode);
     res.json({ shortCode });
 });
 
@@ -118,7 +125,7 @@ app.put('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     const { destinationUrl, description } = req.body;
     if (!redirectsCache.has(shortCode)) {
-        debugLogger('ERROR: Redirect not found:', shortCode);
+        debugLogger('ERROR: Redirect not found: %s', shortCode);
         return res.status(404).json({ error: 'Redirect not found' });
     }
     const redirect = redirectsCache.get(shortCode);
@@ -126,18 +133,18 @@ app.put('/redirects/:shortCode', (req, res) => {
     redirect.description = description !== undefined ? description : redirect.description;
     redirect.updatedAt = Date.now();
     redirectsCache.set(shortCode, redirect);
-    debugLogger('INFO: Updated redirect:', shortCode);
+    debugLogger('INFO: Updated redirect: %s', shortCode);
     res.json({ success: true });
 });
 
 app.delete('/redirects/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     if (!redirectsCache.has(shortCode)) {
-        debugLogger('INFO: Redirect not found:', shortCode);
+        debugLogger('INFO: Redirect not found, skipping: %s', shortCode);
         return res.json({ success: true, message: 'Redirect not found' });
     }
     redirectsCache.delete(shortCode);
-    debugLogger('INFO: Deleted redirect:', shortCode);
+    debugLogger('INFO: Deleted redirect: %s', shortCode);
     res.json({ success: true });
 });
 
@@ -145,16 +152,18 @@ app.get('/r/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     const redirect = redirectsCache.get(shortCode);
     if (redirect) {
-        debugLogger('INFO: Redirecting:', shortCode, redirect.destinationUrl);
+        debugLogger('INFO: Redirecting %s to %s', shortCode, redirect.destinationUrl);
         res.redirect(redirect.destinationUrl);
     } else {
-        debugLogger('ERROR: Redirect not found:', shortCode);
+        debugLogger('ERROR: Redirect not found: %s', shortCode);
         res.status(404).send('Redirect not found');
     }
 });
 
+// Статичні файли після маршрутів
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Налаштування PeerServer
 const peerServer = PeerServer({
     port: HTTP_PORT,
     path: '/peerjs-server',
@@ -163,15 +172,15 @@ const peerServer = PeerServer({
 });
 
 peerServer.on('connection', (client) => {
-    debugLogger('INFO: Peer connected:', client.id);
+    debugLogger('INFO: Peer connected: %s', client.id);
 });
 
 peerServer.on('disconnect', (client) => {
-    debugLogger('INFO: Peer disconnected:', client.id);
+    debugLogger('INFO: Peer disconnected: %s', client.id);
 });
 
 peerServer.on('error', (err) => {
-    debugLogger('ERROR: PeerServer error:', err);
+    debugLogger('ERROR: PeerServer error: %o', err);
 });
 
 function startServer(port, host) {
@@ -181,13 +190,13 @@ function startServer(port, host) {
     server.listen(port, host, () => {
         const actualPort = server.address()?.port || port;
         debugLogger('INFO: Server started on %s:%d', host, actualPort);
-        debugLogger('INFO: PeerJS Server at %s:%s/peerjs-server', isProduction ? 'libp2p.onrender.com' : 'localhost', isProduction ? '' : `${actualPort}`);
+        debugLogger('INFO: PeerJS Server running at %s:%s/peerjs-server', isProduction ? 'libp2p.onrender.com' : 'localhost', isProduction ? '' : `${actualPort}`);
     });
 
     server.on('error', (err) => {
-        debugLogger('ERROR: Server error:', err);
+        debugLogger('ERROR: Server failed to start: %o', err);
         if (err.code === 'EADDRINUSE') {
-            debugLogger('ERROR: Port %d in use, retrying...', port);
+            debugLogger('ERROR: Port %d is in use, retrying in 5 seconds...', port);
             setTimeout(() => {
                 server.close();
                 startServer(port, host);
@@ -202,12 +211,12 @@ try {
     debugLogger('INFO: Starting server on port %d', HTTP_PORT);
     startServer(HTTP_PORT, HOST);
 } catch (err) {
-    debugLogger('ERROR: Failed to start server:', err);
+    debugLogger('ERROR: Failed to start server: %o', err);
     process.exit(1);
 }
 
 process.on('SIGTERM', () => {
-    debugLogger('INFO: SIGTERM received, shutting down...');
+    debugLogger('INFO: Received SIGTERM, shutting down...');
     peerServer.close();
     server.close(() => {
         debugLogger('INFO: Server stopped');
