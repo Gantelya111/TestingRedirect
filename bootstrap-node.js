@@ -14,6 +14,9 @@ const app = express();
 const db = new Database('redirects.db');
 const PORT = process.env.PORT || 8080;
 
+// Налаштування довіри до проксі (для Render)
+app.set('trust proxy', true);
+
 // Ініціалізація бази даних
 db.exec(`
     CREATE TABLE IF NOT EXISTS redirects (
@@ -54,7 +57,7 @@ app.get('/r/:shortCode', (req, res) => {
     const { shortCode } = req.params;
     const redirect = db.prepare('SELECT destination_url FROM redirects WHERE short_code = ?').get(shortCode);
     if (redirect) {
-        res.redirect(redirect.destination_url); // Виправлено: прибрано "resа"
+        res.redirect(redirect.destination_url);
     } else {
         res.status(404).send('Redirect not found');
     }
