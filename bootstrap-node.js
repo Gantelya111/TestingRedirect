@@ -27,16 +27,13 @@ const app = express();
 const server = createServer(app);
 server.setMaxListeners(15);
 
-// Налаштування PeerServer
-const peerServer = PeerServer({
-    port: HTTP_PORT,
-    path: '/peerjs-server',
-    proxied: isProduction,
-    server,
-    debug: true,
-    generateClientId: () => `peer-${Math.random().toString(36).slice(2)}`
+// Дебаг усіх запитів
+app.use((req, res, next) => {
+    debugLogger('INFO: Incoming request: %s %s', req.method, req.url);
+    next();
 });
 
+// Налаштування CORS і Express
 app.use(cors({
     origin: ['https://libp2p.onrender.com', 'http://localhost:8080', 'http://localhost:3000'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -45,12 +42,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static('public'));
 
-// Дебаг-ендпоінт для перевірки
-app.get('/peerjs-server', (req, res) => {
-    debugLogger('INFO: GET /peerjs-server accessed');
-    res.json({ name: 'PeerJS Server', status: 'running', version: 'peer@1.0.2' });
-});
-
+// Маршрути Express
 app.get('/health', (req, res) => {
     debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
@@ -145,6 +137,16 @@ app.get('/r/:shortCode', (req, res) => {
     }
 });
 
+// Налаштування PeerServer (після маршрутів Express)
+const peerServer = PeerServer({
+    port: HTTP_PORT,
+    path: '/peerjs-server',
+    proxied: isProduction,
+    server,
+    debug: true,
+    generateClientId: () => `peer-${Math.random().toString(36).slice(2)}`
+});
+
 peerServer.on('connection', (client) => {
     debugLogger('INFO: Peer connected: %s', client.getId());
 });
@@ -191,6 +193,7 @@ function startServer(port, host) {
 }
 
 try {
+    debugLogger('INFO: Starting server on port %d', HTTP_PORT);
     startServer(HTTP_PORT, HOST);
 } catch (err) {
     debugLogger('ERROR: Failed to start server: %o', err);
