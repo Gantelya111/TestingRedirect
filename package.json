@@ -19,6 +19,8 @@
     "lodash": "^4.17.21",
     "os-browserify": "^0.3.0",
     "path-browserify": "^1.0.1",
+    "peer": "1.0.2",
+    "webpack-cli": "^5.1.4",
     "peerjs": "^1.5.2",
     "peerjs-server": "^0.2.9",
     "process": "^0.11.10",
@@ -27,7 +29,6 @@
     "uint8arrays": "^5.1.0",
     "url": "^0.11.4",
     "util": "^0.12.5",
-    "peer": "1.0.2",
     "vm-browserify": "^1.1.2"
   },
   "devDependencies": {
@@ -38,8 +39,7 @@
     "core-js": "^3.38.1",
     "npm-force-resolutions": "^0.0.10",
     "webpack": "^5.95.0",
-    "webpack-bundle-analyzer": "^4.10.2",
-    "webpack-cli": "^5.1.4"
+    "webpack-bundle-analyzer": "^4.10.2"
   },
   "resolutions": {
     "minimist": "1.2.8"
