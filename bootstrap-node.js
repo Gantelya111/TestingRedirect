@@ -25,7 +25,9 @@ function pruneCacheIfNeeded() {
 
 const app = express();
 const server = createServer(app);
-server.setMaxListeners(15);
+
+// Виправлення MaxListenersExceededWarning
+server.setMaxListeners(20);
 
 // Дебаг запитів
 app.use((req, res, next) => {
@@ -39,8 +41,8 @@ app.use(cors({
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
-app.use(express.static('public'));
 
+// Маршрути перед express.static
 app.get('/health', (req, res) => {
     debugLogger('INFO: Health check requested');
     res.json({ status: 'ok', peerServerRunning: true });
@@ -135,6 +137,9 @@ app.get('/r/:shortCode', (req, res) => {
     }
 });
 
+// express.static після маршрутів
+app.use(express.static('public'));
+
 const peerServer = PeerServer({
     port: HTTP_PORT,
     path: '/peerjs-server',
@@ -155,11 +160,11 @@ peerServer.on('error', (err) => {
     debugLogger('ERROR: PeerServer error: %o', err);
 });
 
-peerServer.on('message', (client, message) => {
-    debugLogger('INFO: WebSocket message from %s: %o', client.getId(), message);
-});
-
 function startServer(port, host) {
+    // Очищення слухачів перед запуском
+    server.removeAllListeners('listening');
+    server.removeAllListeners('error');
+
     server.listen(port, host, () => {
         const actualPort = server.address()?.port || port;
         debugLogger('INFO: Server started on %s:%d', host, actualPort);
